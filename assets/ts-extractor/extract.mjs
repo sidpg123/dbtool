@@ -68,20 +68,46 @@ function isSqlCandidate(text) {
   return sqlStart.test(text) || /\bfrom\b/i.test(text);
 }
 
-function unwrapCallExpression(node) {
-  // await dataSource.query(...) wraps the CallExpression in AwaitExpression
-  if (ts.isAwaitExpression(node)) return unwrapCallExpression(node.expression);
+function unwrapToCallExpression(node) {
+  // Peel common wrappers until we hit a CallExpression (if possible).
+  // Examples:
+  // - await dataSource.query(...)
+  // - return await AppDataSource.query(...)
+  // - void (await ds.query(...))
+  // - (await ds.query(...)) as any
+  // - (await ds.query(...))!
+  for (let i = 0; i < 25; i++) {
+    if (ts.isCallExpression(node)) return node;
 
-  // (dataSource.query)(...) or ((...)) patterns
-  if (ts.isParenthesizedExpression(node)) return unwrapCallExpression(node.expression);
+    if (ts.isAwaitExpression(node)) {
+      node = node.expression;
+      continue;
+    }
 
-  // dataSource.query(...) as any
-  if (ts.isAsExpression(node)) return unwrapCallExpression(node.expression);
+    if (ts.isParenthesizedExpression(node)) {
+      node = node.expression;
+      continue;
+    }
 
-  // Non-null assertion: dataSource.query(...)!
-  if (ts.isNonNullExpression(node)) return unwrapCallExpression(node.expression);
+    if (ts.isAsExpression(node) || ts.isTypeAssertionExpression(node)) {
+      node = node.expression;
+      continue;
+    }
 
-  return node;
+    if (ts.isNonNullExpression(node)) {
+      node = node.expression;
+      continue;
+    }
+
+    if (ts.isVoidExpression(node) || ts.isTypeOfExpression(node) || ts.isDeleteExpression(node)) {
+      node = node.expression;
+      continue;
+    }
+
+    break;
+  }
+
+  return ts.isCallExpression(node) ? node : null;
 }
 
 function getTextForLiteral(node, sf) {
@@ -184,8 +210,8 @@ for (const file of filePaths) {
     }
 
     // TypeORM: *.query("SQL ...")
-    const maybeCall = unwrapCallExpression(node);
-    if (ts.isCallExpression(maybeCall)) {
+    const maybeCall = unwrapToCallExpression(node);
+    if (maybeCall) {
       const calleeExpr = maybeCall.expression;
       const calleeName = getCalleeName(calleeExpr);
 
