@@ -6,5 +6,6 @@ public enum SourceKind
     EmbeddedRawSql = 2,
     TypeOrmRawQuery = 3,
     TypeOrmQueryBuilderSite = 4,
+    TypeOrmQueryDynamic = 5,
 }
 

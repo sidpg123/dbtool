@@ -53,9 +53,10 @@ public sealed class TypeScriptExtractor
         p.Start();
 
         var candidates = new List<QueryCandidate>();
-        while (!p.StandardOutput.EndOfStream)
+        while (true)
         {
             var line = await p.StandardOutput.ReadLineAsync(ct);
+            if (line is null) break;
             if (string.IsNullOrWhiteSpace(line)) continue;
 
             try
@@ -102,6 +103,7 @@ public sealed class TypeScriptExtractor
         {
             "embedded_raw_sql" => (sk = SourceKind.EmbeddedRawSql) == SourceKind.EmbeddedRawSql,
             "typeorm_raw_query" => (sk = SourceKind.TypeOrmRawQuery) == SourceKind.TypeOrmRawQuery,
+            "typeorm_query_dynamic" => (sk = SourceKind.TypeOrmQueryDynamic) == SourceKind.TypeOrmQueryDynamic,
             "typeorm_query_builder_site" => (sk = SourceKind.TypeOrmQueryBuilderSite) == SourceKind.TypeOrmQueryBuilderSite,
             _ => false
         };
