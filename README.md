@@ -13,6 +13,9 @@ This repo currently contains the Phase 0 skeleton:
 
 ## Requirements
 
-- .NET 8 SDK (for building) / .NET 8 runtime (for running framework-dependent)
+- .NET 10 SDK/runtime
 - Node.js (for TypeScript extraction; validated by `doctor`)
 
+dotnet build .\SqlRepoAnalyzer.sln
+dotnet run --project .\src\SqlRepoAnalyzer.Cli\SqlRepoAnalyzer.Cli.csproj -- doctor --out .sqltool --verbose
+dotnet run --project .\src\SqlRepoAnalyzer.Cli\SqlRepoAnalyzer.Cli.csproj -- scan --root . --out .sqltool
