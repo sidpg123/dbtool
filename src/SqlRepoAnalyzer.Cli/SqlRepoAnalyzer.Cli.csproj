@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>SqlRepoAnalyzer</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SqlRepoAnalyzer.Core\SqlRepoAnalyzer.Core.csproj" />
+    <ProjectReference Include="..\SqlRepoAnalyzer.TypeScript\SqlRepoAnalyzer.TypeScript.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\..\assets\ts-extractor\**\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>
+

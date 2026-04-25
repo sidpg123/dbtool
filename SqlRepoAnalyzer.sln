@@ -1,0 +1,35 @@
+
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SqlRepoAnalyzer.Cli", "src\\SqlRepoAnalyzer.Cli\\SqlRepoAnalyzer.Cli.csproj", "{8E7F6F2B-90AF-4B18-8B3F-6C72B66AB7BC}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SqlRepoAnalyzer.Core", "src\\SqlRepoAnalyzer.Core\\SqlRepoAnalyzer.Core.csproj", "{F6C3BC34-E03A-4B10-A37B-76B3E9A59F4D}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SqlRepoAnalyzer.TypeScript", "src\\SqlRepoAnalyzer.TypeScript\\SqlRepoAnalyzer.TypeScript.csproj", "{C534B922-53B2-4B22-A2A5-01BCE5164B92}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{8E7F6F2B-90AF-4B18-8B3F-6C72B66AB7BC}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{8E7F6F2B-90AF-4B18-8B3F-6C72B66AB7BC}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{8E7F6F2B-90AF-4B18-8B3F-6C72B66AB7BC}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{8E7F6F2B-90AF-4B18-8B3F-6C72B66AB7BC}.Release|Any CPU.Build.0 = Release|Any CPU
+		{F6C3BC34-E03A-4B10-A37B-76B3E9A59F4D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F6C3BC34-E03A-4B10-A37B-76B3E9A59F4D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F6C3BC34-E03A-4B10-A37B-76B3E9A59F4D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F6C3BC34-E03A-4B10-A37B-76B3E9A59F4D}.Release|Any CPU.Build.0 = Release|Any CPU
+		{C534B922-53B2-4B22-A2A5-01BCE5164B92}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C534B922-53B2-4B22-A2A5-01BCE5164B92}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C534B922-53B2-4B22-A2A5-01BCE5164B92}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C534B922-53B2-4B22-A2A5-01BCE5164B92}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+EndGlobal
+

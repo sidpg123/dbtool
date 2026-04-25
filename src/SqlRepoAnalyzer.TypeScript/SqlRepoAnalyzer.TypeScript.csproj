@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>SqlRepoAnalyzer.TypeScript</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SqlRepoAnalyzer.Core\SqlRepoAnalyzer.Core.csproj" />
+  </ItemGroup>
+</Project>
+

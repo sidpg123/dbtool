@@ -1,0 +1,12 @@
+{
+  "name": "sqlrepoanalyzer-ts-extractor",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "extract": "node ./extract.mjs --help"
+  },
+  "dependencies": {
+    "typescript": "^5.9.0"
+  }
+}
+

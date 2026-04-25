@@ -1,0 +1,14 @@
+.sqltool/
+bin/
+obj/
+.vs/
+.vscode/
+*.user
+*.suo
+*.cache
+*.log
+
+# Node extractor
+assets/ts-extractor/node_modules/
+assets/ts-extractor/package-lock.json
+
