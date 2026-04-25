@@ -78,6 +78,9 @@ function unwrapCallExpression(node) {
   // dataSource.query(...) as any
   if (ts.isAsExpression(node)) return unwrapCallExpression(node.expression);
 
+  // Non-null assertion: dataSource.query(...)!
+  if (ts.isNonNullExpression(node)) return unwrapCallExpression(node.expression);
+
   return node;
 }
 
