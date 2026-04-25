@@ -4,9 +4,9 @@ Portable command-line tool to scan a cloned TypeScript repository, inventory SQL
 
 ## Phase 0 status
 
-This repo currently contains the Phase 0 skeleton:
+This repo currently contains Phase 1 (inventory) implementation:
 
-- CLI command stubs: `scan`, `suggest`, `report`, `doctor`
+- CLI commands: `scan`, `doctor` (working), `suggest`/`report` (stubs until Phase 2)
 - Structured logging to console + file
 - Output folder conventions (`.sqltool/`)
 - Bundled Node extractor placeholder under `assets/ts-extractor/`
@@ -16,6 +16,16 @@ This repo currently contains the Phase 0 skeleton:
 - .NET 10 SDK/runtime
 - Node.js (for TypeScript extraction; validated by `doctor`)
 
+## Run
+
+```powershell
 dotnet build .\SqlRepoAnalyzer.sln
+npm --prefix .\assets\ts-extractor\ install
 dotnet run --project .\src\SqlRepoAnalyzer.Cli\SqlRepoAnalyzer.Cli.csproj -- doctor --out .sqltool --verbose
 dotnet run --project .\src\SqlRepoAnalyzer.Cli\SqlRepoAnalyzer.Cli.csproj -- scan --root . --out .sqltool
+```
+
+Outputs:
+
+- `.sqltool/manifest.json`
+- `.sqltool/queries.jsonl`

@@ -6,5 +6,6 @@
   <ItemGroup>
     <ProjectReference Include="..\SqlRepoAnalyzer.Core\SqlRepoAnalyzer.Core.csproj" />
   </ItemGroup>
+
 </Project>
 

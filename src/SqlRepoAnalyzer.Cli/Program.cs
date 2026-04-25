@@ -2,7 +2,11 @@ using SqlRepoAnalyzer.Core.Logging;
 using SqlRepoAnalyzer.Core.Manifest;
 using SqlRepoAnalyzer.Core.Output;
 using SqlRepoAnalyzer.Core.Crawl;
+using SqlRepoAnalyzer.Core.Queries;
+using SqlRepoAnalyzer.Core.Reports;
+using SqlRepoAnalyzer.Core.SqlFiles;
 using SqlRepoAnalyzer.TypeScript.Node;
+using SqlRepoAnalyzer.TypeScript.Extractor;
 
 internal static class Program
 {
@@ -42,12 +46,12 @@ SqlRepoAnalyzer - SQL inventory & suggestions tool
 Usage:
   SqlRepoAnalyzer doctor --out <dir>
   SqlRepoAnalyzer scan --root <repoRoot> [--out <dir>]
-  SqlRepoAnalyzer suggest --root <repoRoot> [--out <dir>]   (stub, Phase 0)
-  SqlRepoAnalyzer report --out <dir>                        (stub, Phase 0)
+  SqlRepoAnalyzer suggest --root <repoRoot> [--out <dir>]   (stub, Phase 1)
+  SqlRepoAnalyzer report --out <dir>                        (stub, Phase 1)
 
-Phase 0:
+Phase 1:
   - doctor runs environment checks (Node presence/version, out dir writable)
-  - scan creates manifest + empty placeholder queries.jsonl (scaffolding only)
+  - scan writes manifest + queries.jsonl (SQL inventory)
 """);
     }
 
@@ -124,36 +128,70 @@ Phase 0:
         log.Info("Scan start", new Dictionary<string, object?> { ["repoRoot"] = repoRoot, ["outDir"] = outDir });
         Directory.CreateDirectory(outDir);
 
+        var node = await NodeTooling.CheckNodeAsync(log, CancellationToken.None);
+        if (!node.Ok)
+        {
+            log.Error("Node check failed (required for TS extraction). Run doctor for details.", new Dictionary<string, object?> { ["error"] = node.Error });
+            return 1;
+        }
+
         var crawlOptions = new CrawlOptions(
             RepoRoot: repoRoot,
             MaxFileSizeBytes: 500 * 1024,
             IncludeExtensions: new[] { ".ts", ".tsx", ".js", ".jsx", ".sql" },
             ExcludeDirNames: new[] { "node_modules", "dist", "build", ".git", ".sqltool" }
         );
-        var fileCount = FileCrawler.EnumerateFiles(crawlOptions).Count();
+        var allFiles = FileCrawler.EnumerateFiles(crawlOptions).ToList();
+        var sqlFiles = allFiles.Where(f => Path.GetExtension(f).Equals(".sql", StringComparison.OrdinalIgnoreCase)).ToList();
+        var tsFiles = allFiles.Where(f =>
+            Path.GetExtension(f).Equals(".ts", StringComparison.OrdinalIgnoreCase) ||
+            Path.GetExtension(f).Equals(".tsx", StringComparison.OrdinalIgnoreCase) ||
+            Path.GetExtension(f).Equals(".js", StringComparison.OrdinalIgnoreCase) ||
+            Path.GetExtension(f).Equals(".jsx", StringComparison.OrdinalIgnoreCase)).ToList();
+
+        var candidates = new List<QueryCandidate>();
+
+        foreach (var sf in sqlFiles)
+        {
+            try
+            {
+                candidates.AddRange(SqlFileExtractor.ExtractFromFile(sf));
+            }
+            catch (Exception ex)
+            {
+                log.Warn("Failed to extract from .sql file", new Dictionary<string, object?> { ["file"] = sf }, ex);
+            }
+        }
+
+        var tsExtractor = new TypeScriptExtractor(log);
+        var tsCandidates = await tsExtractor.ExtractAsync(repoRoot, outDir, tsFiles, CancellationToken.None);
+        candidates.AddRange(tsCandidates);
+
+        var records = QueryMerger.MergeAndFingerprint(repoRoot, candidates);
+        JsonlWriter.WriteJsonLines(paths.QueriesPath, records);
+
+        var counts = new Dictionary<string, object?>
+        {
+            ["phase"] = 1,
+            ["maxFileSizeBytes"] = crawlOptions.MaxFileSizeBytes,
+            ["includeExtensions"] = crawlOptions.IncludeExtensions,
+            ["excludedDirNames"] = crawlOptions.ExcludeDirNames,
+            ["crawledFileCount"] = allFiles.Count,
+            ["sqlFileCount"] = sqlFiles.Count,
+            ["tsFileCount"] = tsFiles.Count,
+            ["candidateCount"] = candidates.Count,
+            ["queryRecordCount"] = records.Count
+        };
 
         ManifestWriter.WriteManifest(paths.ManifestPath, new ManifestRecord(
             ReportSchemaVersion: 1,
-            ToolVersion: "0.0.0-phase0",
+            ToolVersion: "0.1.0-phase1",
             GeneratedAtUtc: DateTimeOffset.UtcNow.ToString("o"),
             RepoRoot: repoRoot,
             OutDir: outDir,
             GitSha: null,
-            Config: new Dictionary<string, object?>
-            {
-                ["phase"] = 0,
-                ["note"] = "scan currently only scaffolds outputs in Phase 0",
-                ["maxFileSizeBytes"] = crawlOptions.MaxFileSizeBytes,
-                ["includeExtensions"] = crawlOptions.IncludeExtensions,
-                ["excludedDirNames"] = crawlOptions.ExcludeDirNames,
-                ["crawledFileCount"] = fileCount
-            }
+            Config: counts
         ));
-
-        if (!File.Exists(paths.QueriesPath))
-        {
-            File.WriteAllText(paths.QueriesPath, "");
-        }
 
         log.Info("Scan complete", new Dictionary<string, object?> { ["manifest"] = paths.ManifestPath, ["queries"] = paths.QueriesPath });
         return await Task.FromResult(0);
@@ -168,7 +206,7 @@ Phase 0:
             logFilePath: paths.LogPath,
             minFileLevel: LogLevel.Debug);
 
-        log.Warn("Suggest is a stub in Phase 0");
+        log.Warn("Suggest is a stub (Phase 2)");
         Directory.CreateDirectory(outDir);
         if (!File.Exists(paths.SuggestionsPath))
         {
@@ -200,7 +238,7 @@ Phase 0:
             logFilePath: paths.LogPath,
             minFileLevel: LogLevel.Debug);
 
-        log.Warn("Report is a stub in Phase 0");
+        log.Warn("Report is a stub (Phase 2)");
         Console.WriteLine($"outDir={paths.OutDir}");
         Console.WriteLine($"manifest={paths.ManifestPath}");
         Console.WriteLine($"queries={paths.QueriesPath}");
