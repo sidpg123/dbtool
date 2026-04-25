@@ -49,7 +49,10 @@ const filePaths = fs
   .map((s) => s.trim())
   .filter(Boolean);
 
-const sqlStart = /^\s*(select|with|insert|update|delete|merge)\b/i;
+// Allow leading whitespace/comments/parentheses before the SQL keyword.
+// Example: "/* comment */ SELECT ..." or "(SELECT ...)"
+const sqlStart =
+  /^\s*(?:\/\*[\s\S]*?\*\/|--[^\n]*\n|--[^\n]*$|\s|\(|\))*?(select|with|insert|update|delete|merge)\b/i;
 
 function emit(obj) {
   process.stdout.write(JSON.stringify(obj) + "\n");
@@ -63,6 +66,19 @@ function lineCol(sf, pos) {
 function isSqlCandidate(text) {
   if (!text) return false;
   return sqlStart.test(text) || /\bfrom\b/i.test(text);
+}
+
+function unwrapCallExpression(node) {
+  // await dataSource.query(...) wraps the CallExpression in AwaitExpression
+  if (ts.isAwaitExpression(node)) return unwrapCallExpression(node.expression);
+
+  // (dataSource.query)(...) or ((...)) patterns
+  if (ts.isParenthesizedExpression(node)) return unwrapCallExpression(node.expression);
+
+  // dataSource.query(...) as any
+  if (ts.isAsExpression(node)) return unwrapCallExpression(node.expression);
+
+  return node;
 }
 
 function getTextForLiteral(node, sf) {
@@ -112,7 +128,10 @@ function isLikelyTypeOrmQueryCall(expr) {
     return n === "datasource" || n === "manager" || n === "queryrunner";
   }
 
-  // Fallback: still allow any *.query if first arg looks like SQL (reduces misses, increases false positives)
+  // Common: this.dataSource.query(...) where receiver is ThisExpression
+  if (receiver.kind === ts.SyntaxKind.ThisKeyword) return true;
+
+  // Fallback: allow any *.query(...) member access (still excludes bare `query(...)`)
   return true;
 }
 
@@ -162,17 +181,18 @@ for (const file of filePaths) {
     }
 
     // TypeORM: *.query("SQL ...")
-    if (ts.isCallExpression(node)) {
-      const calleeExpr = node.expression;
+    const maybeCall = unwrapCallExpression(node);
+    if (ts.isCallExpression(maybeCall)) {
+      const calleeExpr = maybeCall.expression;
       const calleeName = getCalleeName(calleeExpr);
 
-      if (isPropertyNamedQuery(calleeExpr) && node.arguments.length >= 1) {
-        const sqlArg = node.arguments[0];
+      if (isPropertyNamedQuery(calleeExpr) && maybeCall.arguments.length >= 1) {
+        const sqlArg = maybeCall.arguments[0];
 
         // Dynamic SQL: template with substitutions, concatenation, non-literal first arg, etc.
         if (ts.isTemplateLiteral(sqlArg) && sqlArg.templateSpans && sqlArg.templateSpans.length > 0) {
           if (isLikelyTypeOrmQueryCall(calleeExpr)) {
-            emitTypeOrmQueryCall(sf, file, node, null, "partial", "typeorm_query_dynamic");
+            emitTypeOrmQueryCall(sf, file, maybeCall, null, "partial", "typeorm_query_dynamic");
           }
         } else {
           const text = getTextForLiteral(sqlArg, sf);
@@ -190,15 +210,15 @@ for (const file of filePaths) {
               completeness: "full",
             });
           } else if (!text && isLikelyTypeOrmQueryCall(calleeExpr)) {
-            emitTypeOrmQueryCall(sf, file, node, null, "partial", "typeorm_query_dynamic");
+            emitTypeOrmQueryCall(sf, file, maybeCall, null, "partial", "typeorm_query_dynamic");
           }
         }
       }
 
       // QueryBuilder site marker
       if (calleeName === "createQueryBuilder") {
-        const start = lineCol(sf, node.getStart(sf));
-        const end = lineCol(sf, node.getEnd());
+        const start = lineCol(sf, maybeCall.getStart(sf));
+        const end = lineCol(sf, maybeCall.getEnd());
         emit({
           sourceKind: "typeorm_query_builder_site",
           file,
