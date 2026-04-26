@@ -51,8 +51,7 @@ const filePaths = fs
 
 // Allow leading whitespace/comments/parentheses before the SQL keyword.
 // Example: "/* comment */ SELECT ..." or "(SELECT ...)"
-const sqlStart =
-  /^\s*(?:\/\*[\s\S]*?\*\/|--[^\n]*\n|--[^\n]*$|\s|\(|\))*?(select|with|insert|update|delete|merge)\b/i;
+const sqlLeadTrivia = /^\s*(?:\/\*[\s\S]*?\*\/|--[^\n]*(?:\n|$)|\s|\(|\))*\s*/i;
 
 function emit(obj) {
   process.stdout.write(JSON.stringify(obj) + "\n");
@@ -65,7 +64,22 @@ function lineCol(sf, pos) {
 
 function isSqlCandidate(text) {
   if (!text) return false;
-  return sqlStart.test(text) || /\bfrom\b/i.test(text);
+
+  const sql = text.replace(sqlLeadTrivia, "");
+  if (!sql) return false;
+
+  // Keep these checks intentionally shape-aware. A UI sentence like
+  // "Cannot delete a tier from a published event" contains SQL words, but it is
+  // not a DELETE statement.
+  return (
+    /^select\b[\s\S]*\bfrom\b/i.test(sql) ||
+    /^select\s+(?:\*|\d+(?:\.\d+)?\b|'[^']*'|"[^"]*"|@[\w]+|:[\w]+|[a-z_][\w$]*\s*\()/i.test(sql) ||
+    /^with\b[\s\S]*\b(select|insert|update|delete|merge)\b/i.test(sql) ||
+    /^insert\s+into\b/i.test(sql) ||
+    /^update\s+[\s\S]+\bset\b/i.test(sql) ||
+    /^delete\s+from\b/i.test(sql) ||
+    /^merge\s+into\b/i.test(sql)
+  );
 }
 
 function unwrapToCallExpression(node) {

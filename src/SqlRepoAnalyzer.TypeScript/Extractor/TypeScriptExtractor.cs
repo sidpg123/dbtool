@@ -61,7 +61,7 @@ public sealed class TypeScriptExtractor
 
             try
             {
-                var dto = JsonSerializer.Deserialize<TsCandidateDto>(line);
+                var dto = JsonSerializer.Deserialize<TsCandidateDto>(line, JsonOptions);
                 if (dto is null) continue;
 
                 if (!TryMapSourceKind(dto.SourceKind, out var sk)) continue;
@@ -108,5 +108,10 @@ public sealed class TypeScriptExtractor
             _ => false
         };
     }
+
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true
+    };
 }
 
