@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>SqlRepoAnalyzer.ShowPlan</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SqlRepoAnalyzer.Core\SqlRepoAnalyzer.Core.csproj" />
+    <ProjectReference Include="..\SqlRepoAnalyzer.Rules\SqlRepoAnalyzer.Rules.csproj" />
+    <ProjectReference Include="..\SqlRepoAnalyzer.Suggestions\SqlRepoAnalyzer.Suggestions.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.SqlClient" Version="6.0.1" />
+  </ItemGroup>
+</Project>

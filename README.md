@@ -4,9 +4,9 @@ Portable command-line tool to scan a cloned TypeScript repository, inventory SQL
 
 ## Status
 
-This repo currently contains **Phase 1 (inventory)** + **Phase 2 (static suggestions)**:
+This repo currently contains **Phase 1 (inventory)** + **Phase 2 (static suggestions)** + **Phase 3 (SHOWPLAN_XML, gated `plan`)**:
 
-- CLI commands: `scan`, `doctor`, `suggest` (working), `report` (still minimal)
+- CLI commands: `scan`, `doctor`, `suggest`, `plan` (working), `report` (still minimal)
 - Structured logging to console + file
 - Output folder conventions (`.sqltool/`)
 - Bundled Node extractor placeholder under `assets/ts-extractor/`
@@ -25,6 +25,12 @@ dotnet run --project .\src\SqlRepoAnalyzer.Cli\SqlRepoAnalyzer.Cli.csproj -- doc
 dotnet run --project .\src\SqlRepoAnalyzer.Cli\SqlRepoAnalyzer.Cli.csproj -- scan --root . --out .sqltool
 dotnet run --project .\src\SqlRepoAnalyzer.Cli\SqlRepoAnalyzer.Cli.csproj -- suggest --root . --out .sqltool
 dotnet run --project .\src\SqlRepoAnalyzer.Cli\SqlRepoAnalyzer.Cli.csproj -- suggest --root . --out .sqltool --schema .\.sqltool\schema-snapshot.json
+
+# Phase 3: estimated plans (requires --enable-showplan; connection via env or --connection)
+$env:SQLTOOL_CONNECTION_STRING = "Server=localhost;Database=YourDb;Integrated Security=true;TrustServerCertificate=true"
+dotnet run --project .\src\SqlRepoAnalyzer.Cli\SqlRepoAnalyzer.Cli.csproj -- plan --root . --out .sqltool --enable-showplan --max-queries 20 --timeout-seconds 30
+# Preview which inventory rows would be sent (no DB round-trips for captures):
+dotnet run --project .\src\SqlRepoAnalyzer.Cli\SqlRepoAnalyzer.Cli.csproj -- plan --root . --out .sqltool --enable-showplan --dry-run
 ```
 
 Outputs:
@@ -32,3 +38,4 @@ Outputs:
 - `.sqltool/manifest.json`
 - `.sqltool/queries.jsonl`
 - `.sqltool/suggestions.jsonl`
+- `.sqltool/plans.jsonl` and `.sqltool/showplan-xml/*.xml` (after `plan`)

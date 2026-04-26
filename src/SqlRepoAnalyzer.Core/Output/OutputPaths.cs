@@ -5,6 +5,8 @@ public sealed record OutputPaths(string OutDir)
     public string ManifestPath => Path.Combine(OutDir, "manifest.json");
     public string QueriesPath => Path.Combine(OutDir, "queries.jsonl");
     public string SuggestionsPath => Path.Combine(OutDir, "suggestions.jsonl");
+    public string PlansJsonlPath => Path.Combine(OutDir, "plans.jsonl");
+    public string ShowPlanXmlDirectory => Path.Combine(OutDir, "showplan-xml");
     public string LogPath => Path.Combine(OutDir, "sqltool.log");
 }
 

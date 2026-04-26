@@ -1,10 +1,10 @@
-# Report schema (Phase 2)
+# Report schema (Phase 2 + Phase 3)
 
 This describes the JSON artifacts the CLI writes today. Field names use **camelCase**.
 
 ## `manifest.json`
 
-Written by `scan` (`reportSchemaVersion: 1`) and overwritten by `suggest` (`reportSchemaVersion: 2`).
+Written by `scan` (`reportSchemaVersion: 1`), overwritten by `suggest` (`2`), and overwritten by `plan` (`3`).
 
 - `reportSchemaVersion` (number)
 - `toolVersion` (string)
@@ -48,3 +48,16 @@ One JSON object per line (Phase 2 static analysis). `queryId` matches `queries.j
   - `message` (string)
   - `suggestion` (string \| null)
   - `evidence` (object \| null)
+
+## `plans.jsonl` (Phase 3)
+
+Emitted by `plan`. One JSON object per inventory row (same `queryId` order as processed from `queries.jsonl`).
+
+- `queryId` (string)
+- `fingerprint` (string)
+- `sourceKind` (string enum name)
+- `status` (string) — `ok` \| `skipped` \| `error` \| `dry_run`
+- `skipReason` (string \| null) — e.g. `no_sql_text`, `not_select_only`, `max_queries_cap`, `would_capture_showplan`
+- `error` (string \| null) — capture / server message when `status` is `error`
+- `planXmlRelativePath` (string \| null) — e.g. `showplan-xml/q_abcd1234.xml` when `status` is `ok`
+- `findings` (array) — same shape as `suggestions.jsonl` findings (table scan, missing-index hint XML, etc.)

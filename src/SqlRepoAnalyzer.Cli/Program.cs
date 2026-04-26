@@ -9,6 +9,7 @@ using SqlRepoAnalyzer.Core.Schema;
 using SqlRepoAnalyzer.TypeScript.Node;
 using SqlRepoAnalyzer.TypeScript.Extractor;
 using SqlRepoAnalyzer.Suggestions;
+using SqlRepoAnalyzer.ShowPlan;
 
 internal static class Program
 {
@@ -28,6 +29,7 @@ internal static class Program
             "doctor" => RunDoctor(rest).GetAwaiter().GetResult(),
             "scan" => RunScan(rest).GetAwaiter().GetResult(),
             "suggest" => RunSuggest(rest),
+            "plan" => RunPlan(rest).GetAwaiter().GetResult(),
             "report" => RunReport(rest),
             _ => Unknown(command),
         };
@@ -49,12 +51,16 @@ Usage:
   SqlRepoAnalyzer doctor --out <dir>
   SqlRepoAnalyzer scan --root <repoRoot> [--out <dir>]
   SqlRepoAnalyzer suggest --root <repoRoot> [--out <dir>] [--queries <path>] [--schema <path>] [--rules-version <string>]
+  SqlRepoAnalyzer plan --root <repoRoot> [--out <dir>] --enable-showplan [--connection <cs>] [--queries <path>] [--timeout-seconds <n>] [--max-queries <n>] [--dry-run]
   SqlRepoAnalyzer report --out <dir>                        (stub; richer summaries planned)
 
 Phase 2:
   - doctor runs environment checks (Node presence/version, out dir writable)
   - scan writes manifest + queries.jsonl (SQL inventory)
   - suggest reads queries.jsonl and writes suggestions.jsonl (static rules + ScriptDom parse)
+
+Phase 3:
+  - plan captures SHOWPLAN_XML for SELECT-only inventory rows (gated; requires --enable-showplan; connection via --connection or SQLTOOL_CONNECTION_STRING)
 """);
     }
 
@@ -304,6 +310,134 @@ Phase 2:
         return (queriesPath, schemaPath, rulesVersion);
     }
 
+    static async Task<int> RunPlan(string[] args)
+    {
+        var (repoRoot, outDir, verbose) = ParseCommon(args);
+        var paths = new OutputPaths(outDir);
+        var log = new Logger(
+            minConsoleLevel: verbose ? LogLevel.Debug : LogLevel.Info,
+            logFilePath: paths.LogPath,
+            minFileLevel: LogLevel.Debug);
+
+        var options = ParsePlanArgs(args, paths);
+
+        if (!options.EnableShowplanAcknowledged)
+        {
+            Console.Error.WriteLine(
+                "Refusing to run: `plan` touches a live SQL Server (compile-only SHOWPLAN_XML for SELECT-shaped text). " +
+                "Re-run with --enable-showplan after you intend to run this against the given connection.");
+            return 2;
+        }
+
+        log.Info("Plan start", new Dictionary<string, object?>
+        {
+            ["repoRoot"] = repoRoot,
+            ["outDir"] = outDir,
+            ["queries"] = options.QueriesPath,
+            ["dryRun"] = options.DryRun,
+            ["maxQueries"] = options.MaxQueries,
+            ["timeoutSeconds"] = options.CommandTimeoutSeconds,
+            ["connection"] = string.IsNullOrWhiteSpace(options.ConnectionString)
+                ? "(none)"
+                : ShowPlanConnection.Describe(options.ConnectionString)
+        });
+
+        Directory.CreateDirectory(outDir);
+
+        if (!File.Exists(options.QueriesPath))
+        {
+            log.Error("queries.jsonl not found", new Dictionary<string, object?> { ["queries"] = options.QueriesPath });
+            return 1;
+        }
+
+        if (!options.DryRun && string.IsNullOrWhiteSpace(options.ConnectionString))
+        {
+            log.Error("Missing connection string for plan. Use --connection \"...\" or set environment variable SQLTOOL_CONNECTION_STRING.");
+            return 1;
+        }
+
+        var records = await PlanRunService.RunAsync(options, CancellationToken.None).ConfigureAwait(false);
+        var ok = records.Count(r => string.Equals(r.Status, "ok", StringComparison.OrdinalIgnoreCase));
+
+        ManifestWriter.WriteManifest(paths.ManifestPath, new ManifestRecord(
+            ReportSchemaVersion: 3,
+            ToolVersion: "0.3.0-phase3",
+            GeneratedAtUtc: DateTimeOffset.UtcNow.ToString("o"),
+            RepoRoot: repoRoot,
+            OutDir: outDir,
+            GitSha: null,
+            RulesVersion: null,
+            SchemaFingerprint: null,
+            Config: new Dictionary<string, object?>
+            {
+                ["phase"] = 3,
+                ["planDryRun"] = options.DryRun,
+                ["planRecordCount"] = records.Count,
+                ["planOkCount"] = ok,
+                ["queriesPath"] = options.QueriesPath,
+                ["connectionSummary"] = string.IsNullOrWhiteSpace(options.ConnectionString)
+                    ? null
+                    : ShowPlanConnection.Describe(options.ConnectionString)
+            }
+        ));
+
+        log.Info("Plan complete", new Dictionary<string, object?>
+        {
+            ["plans"] = paths.PlansJsonlPath,
+            ["showplanXmlDir"] = paths.ShowPlanXmlDirectory,
+            ["okCount"] = ok
+        });
+
+        return 0;
+    }
+
+    static PlanRunOptions ParsePlanArgs(string[] args, OutputPaths defaults)
+    {
+        var queriesPath = defaults.QueriesPath;
+        var connection = Environment.GetEnvironmentVariable("SQLTOOL_CONNECTION_STRING");
+        var timeout = 30;
+        var maxQueries = 50;
+        var enable = false;
+        var dryRun = false;
+
+        for (var i = 0; i < args.Length; i++)
+        {
+            switch (args[i])
+            {
+                case "--queries":
+                    queriesPath = Path.GetFullPath(args[++i]);
+                    break;
+                case "--connection":
+                    connection = args[++i];
+                    break;
+                case "--timeout-seconds":
+                    timeout = int.TryParse(args[++i], out var t) ? t : 30;
+                    break;
+                case "--max-queries":
+                    maxQueries = int.TryParse(args[++i], out var m) ? m : 50;
+                    break;
+                case "--enable-showplan":
+                    enable = true;
+                    break;
+                case "--dry-run":
+                    dryRun = true;
+                    break;
+            }
+        }
+
+        timeout = Math.Clamp(timeout, 1, 600);
+        maxQueries = Math.Clamp(maxQueries, 1, 10_000);
+
+        return new PlanRunOptions(
+            QueriesPath: queriesPath,
+            OutDir: defaults.OutDir,
+            ConnectionString: string.IsNullOrWhiteSpace(connection) ? null : connection,
+            CommandTimeoutSeconds: timeout,
+            MaxQueries: maxQueries,
+            EnableShowplanAcknowledged: enable,
+            DryRun: dryRun);
+    }
+
     static int RunReport(string[] args)
     {
         var outDir = ".sqltool";
@@ -332,6 +466,8 @@ Phase 2:
         Console.WriteLine($"manifest={paths.ManifestPath}");
         Console.WriteLine($"queries={paths.QueriesPath}");
         Console.WriteLine($"suggestions={paths.SuggestionsPath}");
+        Console.WriteLine($"plans={paths.PlansJsonlPath}");
+        Console.WriteLine($"showplanXml={paths.ShowPlanXmlDirectory}");
         return 0;
     }
 }
