@@ -2,9 +2,5 @@
   <PropertyGroup>
     <AssemblyName>SqlRepoAnalyzer.Core</AssemblyName>
   </PropertyGroup>
-
-  <ItemGroup>
-    <PackageReference Include="Microsoft.SqlServer.TransactSql.ScriptDom" Version="170.191.0" />
-  </ItemGroup>
 </Project>
 

@@ -39,12 +39,17 @@ public static class QueryMerger
                     SqlText = c.SqlText,
                     SourceKind = c.SourceKind,
                     Completeness = c.Completeness,
-                    Occurrences = new List<QueryOccurrence>()
+                    Occurrences = new List<QueryOccurrence>(),
+                    OccurrenceKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
                 };
                 recordsById[queryId] = mr;
             }
 
-            mr.Occurrences.Add(occurrence);
+            var occurrenceKey = $"{occurrence.FilePath}:{occurrence.StartLine}:{occurrence.StartCol}:{occurrence.EndLine}:{occurrence.EndCol}";
+            if (mr.OccurrenceKeys.Add(occurrenceKey))
+            {
+                mr.Occurrences.Add(occurrence);
+            }
         }
 
         return recordsById.Values
@@ -75,6 +80,7 @@ public static class QueryMerger
         public required SourceKind SourceKind { get; init; }
         public required string? Completeness { get; init; }
         public required List<QueryOccurrence> Occurrences { get; init; }
+        public required HashSet<string> OccurrenceKeys { get; init; }
     }
 }
 
