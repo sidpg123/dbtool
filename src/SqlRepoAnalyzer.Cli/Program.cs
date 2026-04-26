@@ -5,8 +5,10 @@ using SqlRepoAnalyzer.Core.Crawl;
 using SqlRepoAnalyzer.Core.Queries;
 using SqlRepoAnalyzer.Core.Reports;
 using SqlRepoAnalyzer.Core.SqlFiles;
+using SqlRepoAnalyzer.Core.Schema;
 using SqlRepoAnalyzer.TypeScript.Node;
 using SqlRepoAnalyzer.TypeScript.Extractor;
+using SqlRepoAnalyzer.Suggestions;
 
 internal static class Program
 {
@@ -46,12 +48,13 @@ SqlRepoAnalyzer - SQL inventory & suggestions tool
 Usage:
   SqlRepoAnalyzer doctor --out <dir>
   SqlRepoAnalyzer scan --root <repoRoot> [--out <dir>]
-  SqlRepoAnalyzer suggest --root <repoRoot> [--out <dir>]   (stub, Phase 1)
-  SqlRepoAnalyzer report --out <dir>                        (stub, Phase 1)
+  SqlRepoAnalyzer suggest --root <repoRoot> [--out <dir>] [--queries <path>] [--schema <path>] [--rules-version <string>]
+  SqlRepoAnalyzer report --out <dir>                        (stub; richer summaries planned)
 
-Phase 1:
+Phase 2:
   - doctor runs environment checks (Node presence/version, out dir writable)
   - scan writes manifest + queries.jsonl (SQL inventory)
+  - suggest reads queries.jsonl and writes suggestions.jsonl (static rules + ScriptDom parse)
 """);
     }
 
@@ -190,6 +193,8 @@ Phase 1:
             RepoRoot: repoRoot,
             OutDir: outDir,
             GitSha: null,
+            RulesVersion: null,
+            SchemaFingerprint: null,
             Config: counts
         ));
 
@@ -199,20 +204,104 @@ Phase 1:
 
     static int RunSuggest(string[] args)
     {
-        var (_, outDir, verbose) = ParseCommon(args);
+        var (repoRoot, outDir, verbose) = ParseCommon(args);
         var paths = new OutputPaths(outDir);
         var log = new Logger(
             minConsoleLevel: verbose ? LogLevel.Debug : LogLevel.Info,
             logFilePath: paths.LogPath,
             minFileLevel: LogLevel.Debug);
 
-        log.Warn("Suggest is a stub (Phase 2)");
-        Directory.CreateDirectory(outDir);
-        if (!File.Exists(paths.SuggestionsPath))
+        var (queriesPath, schemaPath, rulesVersion) = ParseSuggestArgs(args, paths);
+
+        log.Info("Suggest start", new Dictionary<string, object?>
         {
-            File.WriteAllText(paths.SuggestionsPath, "");
+            ["repoRoot"] = repoRoot,
+            ["outDir"] = outDir,
+            ["queries"] = queriesPath,
+            ["schema"] = schemaPath ?? "(none)",
+            ["rulesVersion"] = rulesVersion
+        });
+
+        Directory.CreateDirectory(outDir);
+
+        if (!File.Exists(queriesPath))
+        {
+            log.Error("queries.jsonl not found", new Dictionary<string, object?> { ["queries"] = queriesPath });
+            return 1;
         }
+
+        SchemaSnapshot? schema = null;
+        string? schemaFingerprint = null;
+        if (!string.IsNullOrWhiteSpace(schemaPath))
+        {
+            try
+            {
+                schema = SchemaSnapshotLoader.Load(schemaPath);
+                schemaFingerprint = SchemaSnapshotFingerprinter.Sha256Hex(schema);
+                log.Info("Schema snapshot loaded", new Dictionary<string, object?>
+                {
+                    ["schemaPath"] = schemaPath,
+                    ["schemaFingerprint"] = schemaFingerprint
+                });
+            }
+            catch (Exception ex)
+            {
+                log.Error("Failed to load schema snapshot", new Dictionary<string, object?> { ["schemaPath"] = schemaPath! }, ex);
+                return 1;
+            }
+        }
+
+        var queries = SuggestionService.ReadQueriesJsonl(queriesPath);
+        var suggestions = SuggestionService.BuildSuggestions(queries, schema);
+        SuggestionService.WriteSuggestionsJsonl(paths.SuggestionsPath, suggestions);
+
+        ManifestWriter.WriteManifest(paths.ManifestPath, new ManifestRecord(
+            ReportSchemaVersion: 2,
+            ToolVersion: "0.2.0-phase2",
+            GeneratedAtUtc: DateTimeOffset.UtcNow.ToString("o"),
+            RepoRoot: repoRoot,
+            OutDir: outDir,
+            GitSha: null,
+            RulesVersion: rulesVersion,
+            SchemaFingerprint: schemaFingerprint,
+            Config: new Dictionary<string, object?>
+            {
+                ["phase"] = 2,
+                ["rulesVersion"] = rulesVersion,
+                ["schemaPath"] = schemaPath,
+                ["schemaFingerprint"] = schemaFingerprint,
+                ["queryCount"] = queries.Count,
+                ["suggestionCount"] = suggestions.Count
+            }
+        ));
+
+        log.Info("Suggest complete", new Dictionary<string, object?> { ["suggestions"] = paths.SuggestionsPath });
         return 0;
+    }
+
+    static (string queriesPath, string? schemaPath, string rulesVersion) ParseSuggestArgs(string[] args, OutputPaths defaults)
+    {
+        string queriesPath = defaults.QueriesPath;
+        string? schemaPath = null;
+        var rulesVersion = "0.2.0";
+
+        for (var i = 0; i < args.Length; i++)
+        {
+            switch (args[i])
+            {
+                case "--queries":
+                    queriesPath = Path.GetFullPath(args[++i]);
+                    break;
+                case "--schema":
+                    schemaPath = Path.GetFullPath(args[++i]);
+                    break;
+                case "--rules-version":
+                    rulesVersion = args[++i];
+                    break;
+            }
+        }
+
+        return (queriesPath, schemaPath, rulesVersion);
     }
 
     static int RunReport(string[] args)
@@ -238,7 +327,7 @@ Phase 1:
             logFilePath: paths.LogPath,
             minFileLevel: LogLevel.Debug);
 
-        log.Warn("Report is a stub (Phase 2)");
+        log.Warn("Report is a stub (summaries/formatting planned)");
         Console.WriteLine($"outDir={paths.OutDir}");
         Console.WriteLine($"manifest={paths.ManifestPath}");
         Console.WriteLine($"queries={paths.QueriesPath}");

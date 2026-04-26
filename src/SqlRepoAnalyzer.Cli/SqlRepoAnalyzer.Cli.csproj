@@ -7,6 +7,7 @@
   <ItemGroup>
     <ProjectReference Include="..\SqlRepoAnalyzer.Core\SqlRepoAnalyzer.Core.csproj" />
     <ProjectReference Include="..\SqlRepoAnalyzer.TypeScript\SqlRepoAnalyzer.TypeScript.csproj" />
+    <ProjectReference Include="..\SqlRepoAnalyzer.Suggestions\SqlRepoAnalyzer.Suggestions.csproj" />
   </ItemGroup>
 
   <ItemGroup>

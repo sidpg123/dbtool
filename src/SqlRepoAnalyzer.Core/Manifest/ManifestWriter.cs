@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace SqlRepoAnalyzer.Core.Manifest;
 
@@ -11,7 +12,9 @@ public static class ManifestWriter
         Directory.CreateDirectory(Path.GetDirectoryName(manifestPath)!);
         var json = JsonSerializer.Serialize(record, new JsonSerializerOptions
         {
-            WriteIndented = true
+            WriteIndented = true,
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
         });
         File.WriteAllText(manifestPath, json);
     }
@@ -24,6 +27,8 @@ public sealed record ManifestRecord(
     string RepoRoot,
     string OutDir,
     string? GitSha,
+    string? RulesVersion = null,
+    string? SchemaFingerprint = null,
     IReadOnlyDictionary<string, object?>? Config = null
 );
 
