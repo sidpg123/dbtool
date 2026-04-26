@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using SqlRepoAnalyzer.Core.Queries;
 using SqlRepoAnalyzer.Core.Reports;
 using SqlRepoAnalyzer.Core.Schema;
@@ -79,7 +80,8 @@ public static class SuggestionService
             if (string.IsNullOrWhiteSpace(line)) continue;
             var q = JsonSerializer.Deserialize<QueryRecord>(line, new JsonSerializerOptions
             {
-                PropertyNameCaseInsensitive = true
+                PropertyNameCaseInsensitive = true,
+                Converters = { new JsonStringEnumConverter() }
             });
             if (q is not null) list.Add(q);
         }

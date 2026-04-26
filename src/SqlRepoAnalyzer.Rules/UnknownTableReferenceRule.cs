@@ -1,6 +1,8 @@
 using Microsoft.SqlServer.TransactSql.ScriptDom;
+using SqlRepoAnalyzer.Core.Schema;
 
 namespace SqlRepoAnalyzer.Rules;
+
 
 public sealed class UnknownTableReferenceRule : IRule
 {
