@@ -10,7 +10,9 @@ Phase 3 connects to **SQL Server** and, for eligible rows in `queries.jsonl`, ru
 
 ## Eligibility (client-side)
 
-Only batches that parse as `TSqlScript` and contain **at least one `SELECT`** are eligible. Other statement kinds are rejected except a small allowlist of harmless `SET` forms (`SET ANSI_NULLS ON`, isolation level, etc.). Everything else is skipped with `skipReason`.
+By default, only batches that parse as `TSqlScript` and contain **at least one `SELECT`** are eligible. Other statement kinds are rejected except a small allowlist of harmless `SET` forms (`SET ANSI_NULLS ON`, isolation level, etc.).
+
+If you pass **`--allow-dml`**, then `INSERT`, `UPDATE`, `DELETE`, and `MERGE` statements are also eligible for SHOWPLAN_XML capture (still compile-only; still gated by `--enable-showplan`).
 
 ## Limits
 

@@ -8,7 +8,7 @@ namespace SqlRepoAnalyzer.ShowPlan;
 /// </summary>
 public static class SelectOnlyValidator
 {
-    public static bool IsSelectOnly(string sql, out string? rejectReason)
+    public static bool IsEligibleForShowPlan(string sql, bool allowDml, out string? rejectReason)
     {
         rejectReason = null;
         var parse = TsqlParser.Parse(sql);
@@ -43,6 +43,13 @@ public static class SelectOnlyValidator
                     case SetOnOffStatement:
                     case SetTransactionIsolationLevelStatement:
                         continue;
+                    case InsertStatement:
+                    case UpdateStatement:
+                    case DeleteStatement:
+                    case MergeStatement:
+                        if (allowDml) continue;
+                        rejectReason = $"disallowed_statement:{stmt.GetType().Name}";
+                        return false;
                     default:
                         rejectReason = $"disallowed_statement:{stmt.GetType().Name}";
                         return false;
@@ -50,10 +57,16 @@ public static class SelectOnlyValidator
             }
         }
 
-        if (!hasSelect)
+        if (!hasSelect && !allowDml)
         {
             rejectReason = "no_select";
             return false;
+        }
+
+        if (!hasSelect && allowDml)
+        {
+            // DML-only batches are ok when allowDml is enabled.
+            return true;
         }
 
         return true;

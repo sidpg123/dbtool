@@ -43,6 +43,18 @@ public static class ShowPlanXmlAnalyzer
                 Suggestion: "Review predicates, indexes, and cardinality estimates; consider covering or filtered indexes."));
         }
 
+        var keyLookups = relOps.Count(e => string.Equals((string?)e.Attribute("PhysicalOp"), "Key Lookup", StringComparison.OrdinalIgnoreCase));
+        if (keyLookups > 0)
+        {
+            findings.Add(new Finding(
+                "plan.key_lookup",
+                Severity.Warn,
+                Confidence.Medium,
+                $"Estimated plan contains {keyLookups} key lookup operator(s).",
+                Suggestion: "If lookups dominate cost, consider a covering index or query rewrite.",
+                Evidence: new Dictionary<string, object?> { ["needsMetadata"] = true }));
+        }
+
         var missing = root.Descendants(ShowplanNs + "MissingIndexes").Any();
         if (missing)
         {
@@ -51,7 +63,8 @@ public static class ShowPlanXmlAnalyzer
                 Severity.Info,
                 Confidence.Low,
                 "Plan XML includes MissingIndexes metadata (optimizer suggestion, not a mandate).",
-                Suggestion: "Validate with real workload and index design guidelines before adding indexes."));
+                Suggestion: "Validate with real workload and index design guidelines before adding indexes.",
+                Evidence: new Dictionary<string, object?> { ["needsMetadata"] = true }));
         }
 
         var parallelism = relOps.Count(e => string.Equals((string?)e.Attribute("PhysicalOp"), "Parallelism", StringComparison.OrdinalIgnoreCase));

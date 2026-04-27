@@ -7,4 +7,5 @@ public sealed record PlanRunOptions(
     int CommandTimeoutSeconds,
     int MaxQueries,
     bool EnableShowplanAcknowledged,
+    bool AllowDml,
     bool DryRun);

@@ -56,8 +56,23 @@ Emitted by `plan`. One JSON object per inventory row (same `queryId` order as pr
 - `queryId` (string)
 - `fingerprint` (string)
 - `sourceKind` (string enum name)
+- `completeness` (string \| null)
 - `status` (string) — `ok` \| `skipped` \| `error` \| `dry_run`
 - `skipReason` (string \| null) — e.g. `no_sql_text`, `not_select_only`, `max_queries_cap`, `would_capture_showplan`
 - `error` (string \| null) — capture / server message when `status` is `error`
 - `planXmlRelativePath` (string \| null) — e.g. `showplan-xml/q_abcd1234.xml` when `status` is `ok`
 - `findings` (array) — same shape as `suggestions.jsonl` findings (table scan, missing-index hint XML, etc.)
+
+## `plan-suggestions.jsonl` (Phase 3)
+
+Emitted by `plan`. One JSON object per inventory row, in the same shape as `suggestions.jsonl`, but populated from SHOWPLAN_XML analysis.
+
+- `queryId` (string)
+- `fingerprint` (string)
+- `sourceKind` (string enum name)
+- `completeness` (string \| null)
+- `analysisStatus` (string) — `planned` \| `skipped` \| `error` \| `dry_run` \| `no_sql_text`
+- `analysisWarning` (string \| null)
+- `parseOk` (boolean \| null) — `true` for `planned` records (plan captured), `null` otherwise
+- `parseErrors` (array of strings \| null) — not populated in Phase 3
+- `findings` (array) — showplan-based findings (table scan, key lookup, missing-index hint, optional index metadata enrichment, etc.)

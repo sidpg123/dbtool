@@ -15,6 +15,9 @@ public sealed class PlanRecord
     [JsonPropertyName("sourceKind")]
     public SourceKind SourceKind { get; init; }
 
+    [JsonPropertyName("completeness")]
+    public string? Completeness { get; init; }
+
     [JsonPropertyName("status")]
     public required string Status { get; init; }
 

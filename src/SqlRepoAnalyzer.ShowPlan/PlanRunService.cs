@@ -17,6 +17,8 @@ public static class PlanRunService
         var queries = SuggestionService.ReadQueriesJsonl(options.QueriesPath);
         var results = new List<PlanRecord>(queries.Count);
         var serverAttempts = 0;
+        var metadataCache = new MssqlIndexMetadataCache();
+        var planSuggestions = new List<SqlRepoAnalyzer.Suggestions.SuggestionRecord>(queries.Count);
 
         foreach (var q in queries)
         {
@@ -29,21 +31,47 @@ public static class PlanRunService
                     QueryId = q.QueryId,
                     Fingerprint = q.Fingerprint,
                     SourceKind = q.SourceKind,
+                    Completeness = q.Completeness,
                     Status = "skipped",
                     SkipReason = "no_sql_text"
+                });
+                planSuggestions.Add(new SqlRepoAnalyzer.Suggestions.SuggestionRecord
+                {
+                    QueryId = q.QueryId,
+                    Fingerprint = q.Fingerprint,
+                    SourceKind = q.SourceKind,
+                    Completeness = q.Completeness,
+                    AnalysisStatus = "no_sql_text",
+                    AnalysisWarning = "No SQL text available for SHOWPLAN capture.",
+                    ParseOk = null,
+                    ParseErrors = null,
+                    Findings = Array.Empty<SqlRepoAnalyzer.Rules.Finding>()
                 });
                 continue;
             }
 
-            if (!SelectOnlyValidator.IsSelectOnly(q.SqlText, out var reject))
+            if (!SelectOnlyValidator.IsEligibleForShowPlan(q.SqlText, options.AllowDml, out var reject))
             {
                 results.Add(new PlanRecord
                 {
                     QueryId = q.QueryId,
                     Fingerprint = q.Fingerprint,
                     SourceKind = q.SourceKind,
+                    Completeness = q.Completeness,
                     Status = "skipped",
                     SkipReason = reject
+                });
+                planSuggestions.Add(new SqlRepoAnalyzer.Suggestions.SuggestionRecord
+                {
+                    QueryId = q.QueryId,
+                    Fingerprint = q.Fingerprint,
+                    SourceKind = q.SourceKind,
+                    Completeness = q.Completeness,
+                    AnalysisStatus = "skipped",
+                    AnalysisWarning = $"Not eligible for SHOWPLAN: {reject}",
+                    ParseOk = null,
+                    ParseErrors = null,
+                    Findings = Array.Empty<SqlRepoAnalyzer.Rules.Finding>()
                 });
                 continue;
             }
@@ -55,8 +83,21 @@ public static class PlanRunService
                     QueryId = q.QueryId,
                     Fingerprint = q.Fingerprint,
                     SourceKind = q.SourceKind,
+                    Completeness = q.Completeness,
                     Status = "skipped",
                     SkipReason = "max_queries_cap"
+                });
+                planSuggestions.Add(new SqlRepoAnalyzer.Suggestions.SuggestionRecord
+                {
+                    QueryId = q.QueryId,
+                    Fingerprint = q.Fingerprint,
+                    SourceKind = q.SourceKind,
+                    Completeness = q.Completeness,
+                    AnalysisStatus = "skipped",
+                    AnalysisWarning = "Skipped due to --max-queries cap.",
+                    ParseOk = null,
+                    ParseErrors = null,
+                    Findings = Array.Empty<SqlRepoAnalyzer.Rules.Finding>()
                 });
                 continue;
             }
@@ -70,14 +111,27 @@ public static class PlanRunService
                     QueryId = q.QueryId,
                     Fingerprint = q.Fingerprint,
                     SourceKind = q.SourceKind,
+                    Completeness = q.Completeness,
                     Status = "dry_run",
                     SkipReason = "would_capture_showplan"
+                });
+                planSuggestions.Add(new SqlRepoAnalyzer.Suggestions.SuggestionRecord
+                {
+                    QueryId = q.QueryId,
+                    Fingerprint = q.Fingerprint,
+                    SourceKind = q.SourceKind,
+                    Completeness = q.Completeness,
+                    AnalysisStatus = "dry_run",
+                    AnalysisWarning = "Dry run: would capture SHOWPLAN_XML.",
+                    ParseOk = null,
+                    ParseErrors = null,
+                    Findings = Array.Empty<SqlRepoAnalyzer.Rules.Finding>()
                 });
                 continue;
             }
 
             var exec = await ShowPlanExecutor.CaptureShowPlanXmlAsync(
-                    options.ConnectionString,
+                    options.ConnectionString!,
                     q.SqlText,
                     options.CommandTimeoutSeconds,
                     cancellationToken)
@@ -90,8 +144,21 @@ public static class PlanRunService
                     QueryId = q.QueryId,
                     Fingerprint = q.Fingerprint,
                     SourceKind = q.SourceKind,
+                    Completeness = q.Completeness,
                     Status = "error",
                     Error = exec.ErrorMessage ?? "unknown_error"
+                });
+                planSuggestions.Add(new SqlRepoAnalyzer.Suggestions.SuggestionRecord
+                {
+                    QueryId = q.QueryId,
+                    Fingerprint = q.Fingerprint,
+                    SourceKind = q.SourceKind,
+                    Completeness = q.Completeness,
+                    AnalysisStatus = "error",
+                    AnalysisWarning = exec.ErrorMessage ?? "unknown_error",
+                    ParseOk = null,
+                    ParseErrors = null,
+                    Findings = Array.Empty<SqlRepoAnalyzer.Rules.Finding>()
                 });
                 continue;
             }
@@ -102,19 +169,45 @@ public static class PlanRunService
             await File.WriteAllTextAsync(fullPath, exec.Xml, cancellationToken).ConfigureAwait(false);
 
             var findings = ShowPlanXmlAnalyzer.Analyze(exec.Xml);
+            findings = await PlanMetadataEnricher.EnrichIfNeededAsync(
+                    options.ConnectionString!,
+                    exec.Xml,
+                    findings,
+                    options.CommandTimeoutSeconds,
+                    metadataCache,
+                    cancellationToken)
+                .ConfigureAwait(false);
+
             results.Add(new PlanRecord
             {
                 QueryId = q.QueryId,
                 Fingerprint = q.Fingerprint,
                 SourceKind = q.SourceKind,
+                Completeness = q.Completeness,
                 Status = "ok",
                 PlanXmlRelativePath = relative,
+                Findings = findings
+            });
+
+            planSuggestions.Add(new SqlRepoAnalyzer.Suggestions.SuggestionRecord
+            {
+                QueryId = q.QueryId,
+                Fingerprint = q.Fingerprint,
+                SourceKind = q.SourceKind,
+                Completeness = q.Completeness,
+                AnalysisStatus = "planned",
+                AnalysisWarning = null,
+                ParseOk = true,
+                ParseErrors = null,
                 Findings = findings
             });
         }
 
         var plansPath = Path.Combine(options.OutDir, "plans.jsonl");
         JsonlWriter.WriteJsonLines(plansPath, results);
+
+        var planSuggestionsPath = Path.Combine(options.OutDir, "plan-suggestions.jsonl");
+        JsonlWriter.WriteJsonLines(planSuggestionsPath, planSuggestions);
         return results;
     }
 

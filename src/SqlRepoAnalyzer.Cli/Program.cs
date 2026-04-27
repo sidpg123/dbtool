@@ -51,7 +51,7 @@ Usage:
   SqlRepoAnalyzer doctor --out <dir>
   SqlRepoAnalyzer scan --root <repoRoot> [--out <dir>]
   SqlRepoAnalyzer suggest --root <repoRoot> [--out <dir>] [--queries <path>] [--schema <path>] [--rules-version <string>]
-  SqlRepoAnalyzer plan --root <repoRoot> [--out <dir>] --enable-showplan [--connection <cs>] [--queries <path>] [--timeout-seconds <n>] [--max-queries <n>] [--dry-run]
+  SqlRepoAnalyzer plan --root <repoRoot> [--out <dir>] --enable-showplan [--allow-dml] [--connection <cs>] [--queries <path>] [--timeout-seconds <n>] [--max-queries <n>] [--dry-run]
   SqlRepoAnalyzer report --out <dir>                        (stub; richer summaries planned)
 
 Phase 2:
@@ -60,7 +60,7 @@ Phase 2:
   - suggest reads queries.jsonl and writes suggestions.jsonl (static rules + ScriptDom parse)
 
 Phase 3:
-  - plan captures SHOWPLAN_XML for SELECT-only inventory rows (gated; requires --enable-showplan; connection via --connection or SQLTOOL_CONNECTION_STRING)
+  - plan captures SHOWPLAN_XML for SELECT-only inventory rows by default (gated; requires --enable-showplan; connection via --connection or SQLTOOL_CONNECTION_STRING). Use --allow-dml to also allow INSERT/UPDATE/DELETE/MERGE.
 """);
     }
 
@@ -398,6 +398,7 @@ Phase 3:
         var timeout = 30;
         var maxQueries = 50;
         var enable = false;
+        var allowDml = false;
         var dryRun = false;
 
         for (var i = 0; i < args.Length; i++)
@@ -419,6 +420,9 @@ Phase 3:
                 case "--enable-showplan":
                     enable = true;
                     break;
+                case "--allow-dml":
+                    allowDml = true;
+                    break;
                 case "--dry-run":
                     dryRun = true;
                     break;
@@ -435,6 +439,7 @@ Phase 3:
             CommandTimeoutSeconds: timeout,
             MaxQueries: maxQueries,
             EnableShowplanAcknowledged: enable,
+            AllowDml: allowDml,
             DryRun: dryRun);
     }
 
