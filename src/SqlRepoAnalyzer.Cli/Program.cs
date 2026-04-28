@@ -49,7 +49,7 @@ SqlRepoAnalyzer - SQL inventory & suggestions tool
 
 Usage:
   SqlRepoAnalyzer doctor --out <dir>
-  SqlRepoAnalyzer scan --root <repoRoot> [--out <dir>]
+  SqlRepoAnalyzer scan --root <repoRoot> [--out <dir>] [--backend csharp|node|mixed]
   SqlRepoAnalyzer suggest --root <repoRoot> [--out <dir>] [--queries <path>] [--schema <path>] [--rules-version <string>]
   SqlRepoAnalyzer plan --root <repoRoot> [--out <dir>] --enable-showplan [--allow-dml] [--connection <cs>] [--queries <path>] [--timeout-seconds <n>] [--max-queries <n>] [--dry-run]
   SqlRepoAnalyzer report --out <dir>                        (stub; richer summaries planned)
@@ -90,6 +90,40 @@ Phase 3:
         return (Path.GetFullPath(repoRoot), Path.GetFullPath(outDir), verbose);
     }
 
+    /// <summary>
+    /// Parses <c>--backend csharp|node|mixed</c>. Defaults to <c>mixed</c> when omitted. Last flag wins.
+    /// </summary>
+    static bool TryParseBackend(string[] args, out string backend, out string? error)
+    {
+        backend = "mixed";
+        error = null;
+        for (var i = 0; i < args.Length; i++)
+        {
+            if (!string.Equals(args[i], "--backend", StringComparison.OrdinalIgnoreCase))
+                continue;
+            if (i + 1 >= args.Length)
+            {
+                error = "Missing value for --backend (csharp, node, or mixed).";
+                return false;
+            }
+
+            var v = args[++i].Trim().ToLowerInvariant();
+            switch (v)
+            {
+                case "csharp":
+                case "node":
+                case "mixed":
+                    backend = v;
+                    break;
+                default:
+                    error = $"Invalid --backend '{v}'. Use csharp, node, or mixed.";
+                    return false;
+            }
+        }
+
+        return true;
+    }
+
     static async Task<int> RunDoctor(string[] args)
     {
         var (_, outDir, verbose) = ParseCommon(args);
@@ -128,13 +162,24 @@ Phase 3:
     static async Task<int> RunScan(string[] args)
     {
         var (repoRoot, outDir, verbose) = ParseCommon(args);
+        if (!TryParseBackend(args, out var backend, out var backendError))
+        {
+            Console.Error.WriteLine(backendError);
+            return 2;
+        }
+
         var paths = new OutputPaths(outDir);
         var log = new Logger(
             minConsoleLevel: verbose ? LogLevel.Debug : LogLevel.Info,
             logFilePath: paths.LogPath,
             minFileLevel: LogLevel.Debug);
 
-        log.Info("Scan start", new Dictionary<string, object?> { ["repoRoot"] = repoRoot, ["outDir"] = outDir });
+        log.Info("Scan start", new Dictionary<string, object?>
+        {
+            ["repoRoot"] = repoRoot,
+            ["outDir"] = outDir,
+            ["backend"] = backend
+        });
         Directory.CreateDirectory(outDir);
 
         var node = await NodeTooling.CheckNodeAsync(log, CancellationToken.None);
@@ -189,7 +234,8 @@ Phase 3:
             ["sqlFileCount"] = sqlFiles.Count,
             ["tsFileCount"] = tsFiles.Count,
             ["candidateCount"] = candidates.Count,
-            ["queryRecordCount"] = records.Count
+            ["queryRecordCount"] = records.Count,
+            ["backend"] = backend
         };
 
         ManifestWriter.WriteManifest(paths.ManifestPath, new ManifestRecord(
@@ -201,6 +247,7 @@ Phase 3:
             GitSha: null,
             RulesVersion: null,
             SchemaFingerprint: null,
+            Backend: backend,
             Config: counts
         ));
 
@@ -261,6 +308,8 @@ Phase 3:
         var suggestions = SuggestionService.BuildSuggestions(queries, schema);
         SuggestionService.WriteSuggestionsJsonl(paths.SuggestionsPath, suggestions);
 
+        var preservedBackend = ManifestReader.TryReadBackend(paths.ManifestPath);
+
         ManifestWriter.WriteManifest(paths.ManifestPath, new ManifestRecord(
             ReportSchemaVersion: 2,
             ToolVersion: "0.2.0-phase2",
@@ -270,6 +319,7 @@ Phase 3:
             GitSha: null,
             RulesVersion: rulesVersion,
             SchemaFingerprint: schemaFingerprint,
+            Backend: preservedBackend,
             Config: new Dictionary<string, object?>
             {
                 ["phase"] = 2,
@@ -359,6 +409,8 @@ Phase 3:
         var records = await PlanRunService.RunAsync(options, CancellationToken.None).ConfigureAwait(false);
         var ok = records.Count(r => string.Equals(r.Status, "ok", StringComparison.OrdinalIgnoreCase));
 
+        var planPreservedBackend = ManifestReader.TryReadBackend(paths.ManifestPath);
+
         ManifestWriter.WriteManifest(paths.ManifestPath, new ManifestRecord(
             ReportSchemaVersion: 3,
             ToolVersion: "0.3.0-phase3",
@@ -368,6 +420,7 @@ Phase 3:
             GitSha: null,
             RulesVersion: null,
             SchemaFingerprint: null,
+            Backend: planPreservedBackend,
             Config: new Dictionary<string, object?>
             {
                 ["phase"] = 3,

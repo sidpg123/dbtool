@@ -7,6 +7,16 @@ public static class RulesRegistry
         new TsqlParseErrorRule(),
         new SelectStarRule(),
         new LeadingWildcardLikeRule(),
-        new UnknownTableReferenceRule()
+        new UnknownTableReferenceRule(),
+        new SqlStdMergeProhibitedRule(),
+        new SqlStdCursorAvoidRule(),
+        new SqlStdTruncateWarnRule(),
+        new SqlStdNonSargablePredicateRule(),
+        new SqlStdSchemaQualifiedObjectRule(),
+        new SqlStdJoinRequiresAliasRule(),
+        new SqlStdSnakeCaseIdentifierRule(),
+        new SqlStdIndentTabsRule(),
+        new SqlStdKeywordUppercaseRule(),
+        new SqlStdXactAbortRule()
     };
 }

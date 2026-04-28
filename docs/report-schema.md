@@ -14,7 +14,8 @@ Written by `scan` (`reportSchemaVersion: 1`), overwritten by `suggest` (`2`), an
 - `gitSha` (string \| null) — reserved; not populated yet
 - `rulesVersion` (string \| null) — set by `suggest` (`--rules-version`)
 - `schemaFingerprint` (string \| null) — SHA-256 hex of a canonical JSON snapshot; set by `suggest` when `--schema` loads successfully
-- `config` (object \| null) — command-specific counters/metadata
+- `backend` (string \| null) — primary stack hint for extractors/heuristics: `csharp` \| `node` \| `mixed`. Set by `scan --backend` (defaults to `mixed` when omitted). Preserved when `suggest` or `plan` overwrites the manifest so downstream tooling still knows the repo profile.
+- `config` (object \| null) — command-specific counters/metadata (Phase 1 `config` also echoes `backend` where applicable)
 
 ## `queries.jsonl`
 

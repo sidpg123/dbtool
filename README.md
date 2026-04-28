@@ -16,6 +16,24 @@ This repo currently contains **Phase 1 (inventory)** + **Phase 2 (static suggest
 - .NET 10 SDK/runtime
 - Node.js (for TypeScript extraction; validated by `doctor`)
 
+## Backend profile (`manifest.backend`)
+
+Repos differ: some are **.NET-heavy**, some **Node-heavy**. `scan` records that choice in **`.sqltool/manifest.json`** so later steps (and future extractors) know what they’re dealing with.
+
+| Flag | Meaning |
+|------|---------|
+| `--backend csharp` | Primarily C# / .NET backend SQL patterns |
+| `--backend node` | Primarily Node / TypeScript backend SQL patterns |
+| `--backend mixed` | **Default** — both ecosystems matter (current `scan` still crawls `.sql` + TS/JS) |
+
+Example:
+
+```powershell
+dotnet run --project .\src\SqlRepoAnalyzer.Cli\SqlRepoAnalyzer.Cli.csproj -- scan --root . --out .sqltool --backend node
+```
+
+`suggest` and `plan` **rewrite** `manifest.json` but **keep** `backend` from the previous manifest when present.
+
 ## Run
 
 ```powershell
@@ -23,6 +41,7 @@ dotnet build .\SqlRepoAnalyzer.sln
 npm --prefix .\assets\ts-extractor\ install
 dotnet run --project .\src\SqlRepoAnalyzer.Cli\SqlRepoAnalyzer.Cli.csproj -- doctor --out .sqltool --verbose
 dotnet run --project .\src\SqlRepoAnalyzer.Cli\SqlRepoAnalyzer.Cli.csproj -- scan --root . --out .sqltool
+dotnet run --project .\src\SqlRepoAnalyzer.Cli\SqlRepoAnalyzer.Cli.csproj -- scan --root . --out .sqltool --backend mixed
 dotnet run --project .\src\SqlRepoAnalyzer.Cli\SqlRepoAnalyzer.Cli.csproj -- suggest --root . --out .sqltool
 dotnet run --project .\src\SqlRepoAnalyzer.Cli\SqlRepoAnalyzer.Cli.csproj -- suggest --root . --out .sqltool --schema .\.sqltool\schema-snapshot.json
 

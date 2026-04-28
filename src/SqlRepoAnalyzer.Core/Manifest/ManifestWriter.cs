@@ -29,6 +29,11 @@ public sealed record ManifestRecord(
     string? GitSha,
     string? RulesVersion = null,
     string? SchemaFingerprint = null,
+    /// <summary>
+    /// Primary backend stack for extraction/heuristics: <c>csharp</c>, <c>node</c>, or <c>mixed</c>.
+    /// Set by <c>scan --backend</c>; preserved when later commands overwrite the manifest.
+    /// </summary>
+    string? Backend = null,
     IReadOnlyDictionary<string, object?>? Config = null
 );
 
