@@ -49,15 +49,15 @@ SqlRepoAnalyzer - SQL inventory & suggestions tool
 
 Usage:
   SqlRepoAnalyzer doctor --out <dir>
-  SqlRepoAnalyzer scan --root <repoRoot> [--out <dir>] [--backend csharp|node|mixed]
+  SqlRepoAnalyzer scan --root <repoRoot> [--out <dir>] [--backend csharp|node|mixed] [--query-scope all|select]
   SqlRepoAnalyzer suggest --root <repoRoot> [--out <dir>] [--queries <path>] [--schema <path>] [--rules-version <string>]
   SqlRepoAnalyzer plan --root <repoRoot> [--out <dir>] --enable-showplan [--allow-dml] [--connection <cs>] [--queries <path>] [--timeout-seconds <n>] [--max-queries <n>] [--dry-run]
   SqlRepoAnalyzer report --out <dir>                        (stub; richer summaries planned)
 
 Phase 2:
   - doctor runs environment checks (Node presence/version, out dir writable)
-  - scan writes manifest + queries.jsonl (SQL inventory)
-  - suggest reads queries.jsonl and writes suggestions.jsonl (static rules + ScriptDom parse)
+  - scan writes manifest + queries.json (SQL inventory)
+  - suggest reads queries.json and writes suggestions.json (static rules + ScriptDom parse)
 
 Phase 3:
   - plan captures SHOWPLAN_XML for SELECT-only inventory rows by default (gated; requires --enable-showplan; connection via --connection or SQLTOOL_CONNECTION_STRING). Use --allow-dml to also allow INSERT/UPDATE/DELETE/MERGE.
@@ -124,6 +124,39 @@ Phase 3:
         return true;
     }
 
+    /// <summary>
+    /// Parses <c>--query-scope all|select</c> for scan. Defaults to <c>all</c> when omitted. Last flag wins.
+    /// </summary>
+    static bool TryParseQueryScope(string[] args, out string queryScope, out string? error)
+    {
+        queryScope = "all";
+        error = null;
+        for (var i = 0; i < args.Length; i++)
+        {
+            if (!string.Equals(args[i], "--query-scope", StringComparison.OrdinalIgnoreCase))
+                continue;
+            if (i + 1 >= args.Length)
+            {
+                error = "Missing value for --query-scope (all or select).";
+                return false;
+            }
+
+            var v = args[++i].Trim().ToLowerInvariant();
+            switch (v)
+            {
+                case "all":
+                case "select":
+                    queryScope = v;
+                    break;
+                default:
+                    error = $"Invalid --query-scope '{v}'. Use all or select.";
+                    return false;
+            }
+        }
+
+        return true;
+    }
+
     static async Task<int> RunDoctor(string[] args)
     {
         var (_, outDir, verbose) = ParseCommon(args);
@@ -167,6 +200,11 @@ Phase 3:
             Console.Error.WriteLine(backendError);
             return 2;
         }
+        if (!TryParseQueryScope(args, out var queryScope, out var queryScopeError))
+        {
+            Console.Error.WriteLine(queryScopeError);
+            return 2;
+        }
 
         var paths = new OutputPaths(outDir);
         var log = new Logger(
@@ -178,7 +216,8 @@ Phase 3:
         {
             ["repoRoot"] = repoRoot,
             ["outDir"] = outDir,
-            ["backend"] = backend
+            ["backend"] = backend,
+            ["queryScope"] = queryScope
         });
         Directory.CreateDirectory(outDir);
 
@@ -221,8 +260,18 @@ Phase 3:
         var tsCandidates = await tsExtractor.ExtractAsync(repoRoot, outDir, tsFiles, CancellationToken.None);
         candidates.AddRange(tsCandidates);
 
+        var preFilterCandidateCount = candidates.Count;
+        if (string.Equals(queryScope, "select", StringComparison.OrdinalIgnoreCase))
+        {
+            candidates = candidates
+                .Where(c => !string.IsNullOrWhiteSpace(c.SqlText))
+                .Where(c => c.SourceKind != SourceKind.TypeOrmQueryDynamic)
+                .Where(c => SelectOnlyValidator.IsEligibleForShowPlan(c.SqlText!, allowDml: false, out _))
+                .ToList();
+        }
+
         var records = QueryMerger.MergeAndFingerprint(repoRoot, candidates);
-        JsonlWriter.WriteJsonLines(paths.QueriesPath, records);
+        JsonlWriter.WriteJsonArray(paths.QueriesPath, records);
 
         var counts = new Dictionary<string, object?>
         {
@@ -233,9 +282,11 @@ Phase 3:
             ["crawledFileCount"] = allFiles.Count,
             ["sqlFileCount"] = sqlFiles.Count,
             ["tsFileCount"] = tsFiles.Count,
+            ["candidateCountBeforeQueryScopeFilter"] = preFilterCandidateCount,
             ["candidateCount"] = candidates.Count,
             ["queryRecordCount"] = records.Count,
-            ["backend"] = backend
+            ["backend"] = backend,
+            ["queryScope"] = queryScope
         };
 
         ManifestWriter.WriteManifest(paths.ManifestPath, new ManifestRecord(
@@ -251,7 +302,11 @@ Phase 3:
             Config: counts
         ));
 
-        log.Info("Scan complete", new Dictionary<string, object?> { ["manifest"] = paths.ManifestPath, ["queries"] = paths.QueriesPath });
+        log.Info("Scan complete", new Dictionary<string, object?>
+        {
+            ["manifest"] = paths.ManifestPath,
+            ["queries"] = paths.QueriesPath
+        });
         return await Task.FromResult(0);
     }
 
@@ -279,7 +334,7 @@ Phase 3:
 
         if (!File.Exists(queriesPath))
         {
-            log.Error("queries.jsonl not found", new Dictionary<string, object?> { ["queries"] = queriesPath });
+            log.Error("queries.json not found", new Dictionary<string, object?> { ["queries"] = queriesPath });
             return 1;
         }
 
@@ -304,9 +359,9 @@ Phase 3:
             }
         }
 
-        var queries = SuggestionService.ReadQueriesJsonl(queriesPath);
+        var queries = SuggestionService.ReadQueriesJson(queriesPath);
         var suggestions = SuggestionService.BuildSuggestions(queries, schema);
-        SuggestionService.WriteSuggestionsJsonl(paths.SuggestionsPath, suggestions);
+        SuggestionService.WriteSuggestionsJson(paths.SuggestionsPath, suggestions);
 
         var preservedBackend = ManifestReader.TryReadBackend(paths.ManifestPath);
 
@@ -331,7 +386,10 @@ Phase 3:
             }
         ));
 
-        log.Info("Suggest complete", new Dictionary<string, object?> { ["suggestions"] = paths.SuggestionsPath });
+        log.Info("Suggest complete", new Dictionary<string, object?>
+        {
+            ["suggestions"] = paths.SuggestionsPath
+        });
         return 0;
     }
 
@@ -396,7 +454,7 @@ Phase 3:
 
         if (!File.Exists(options.QueriesPath))
         {
-            log.Error("queries.jsonl not found", new Dictionary<string, object?> { ["queries"] = options.QueriesPath });
+            log.Error("queries.json not found", new Dictionary<string, object?> { ["queries"] = options.QueriesPath });
             return 1;
         }
 
@@ -436,7 +494,8 @@ Phase 3:
 
         log.Info("Plan complete", new Dictionary<string, object?>
         {
-            ["plans"] = paths.PlansJsonlPath,
+            ["plans"] = paths.PlansPath,
+            ["planSuggestions"] = paths.PlanSuggestionsPath,
             ["showplanXmlDir"] = paths.ShowPlanXmlDirectory,
             ["okCount"] = ok
         });
@@ -524,7 +583,8 @@ Phase 3:
         Console.WriteLine($"manifest={paths.ManifestPath}");
         Console.WriteLine($"queries={paths.QueriesPath}");
         Console.WriteLine($"suggestions={paths.SuggestionsPath}");
-        Console.WriteLine($"plans={paths.PlansJsonlPath}");
+        Console.WriteLine($"plans={paths.PlansPath}");
+        Console.WriteLine($"planSuggestions={paths.PlanSuggestionsPath}");
         Console.WriteLine($"showplanXml={paths.ShowPlanXmlDirectory}");
         return 0;
     }

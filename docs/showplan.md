@@ -1,6 +1,6 @@
 # SHOWPLAN_XML (`plan` command)
 
-Phase 3 connects to **SQL Server** and, for eligible rows in `queries.jsonl`, runs `SET SHOWPLAN_XML ON` and returns **estimated** showplan XML (result rows are not executed; the batch is still **compiled** on the server).
+Phase 3 connects to **SQL Server** and, for eligible rows in `queries.json`, runs `SET SHOWPLAN_XML ON` and returns **estimated** showplan XML (result rows are not executed; the batch is still **compiled** on the server).
 
 ## Safety / gating
 
@@ -21,7 +21,7 @@ If you pass **`--allow-dml`**, then `INSERT`, `UPDATE`, `DELETE`, and `MERGE` st
 
 ## Outputs
 
-- **`plans.jsonl`**: one record per `queries.jsonl` row processed (see `docs/report-schema.md`).
+- **`plans.json`**: one record per `queries.json` row processed (see `docs/report-schema.md`).
 - **`showplan-xml/<queryId>.xml`**: raw SHOWPLAN_XML for `status: ok` rows.
 
 ## Manifest

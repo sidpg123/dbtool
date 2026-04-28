@@ -17,9 +17,9 @@ Written by `scan` (`reportSchemaVersion: 1`), overwritten by `suggest` (`2`), an
 - `backend` (string \| null) — primary stack hint for extractors/heuristics: `csharp` \| `node` \| `mixed`. Set by `scan --backend` (defaults to `mixed` when omitted). Preserved when `suggest` or `plan` overwrites the manifest so downstream tooling still knows the repo profile.
 - `config` (object \| null) — command-specific counters/metadata (Phase 1 `config` also echoes `backend` where applicable)
 
-## `queries.jsonl`
+## `queries.json`
 
-One JSON object per line (inventory).
+JSON array of query inventory records.
 
 - `queryId` (string)
 - `fingerprint` (string)
@@ -30,9 +30,9 @@ One JSON object per line (inventory).
   - `filePath` (string, repo-relative when possible)
   - `startLine`, `startCol`, `endLine`, `endCol` (numbers)
 
-## `suggestions.jsonl`
+## `suggestions.json`
 
-One JSON object per line (Phase 2 static analysis). `queryId` matches `queries.jsonl`.
+JSON array (Phase 2 static analysis). `queryId` matches `queries.json`.
 
 - `queryId` (string)
 - `fingerprint` (string)
@@ -50,9 +50,9 @@ One JSON object per line (Phase 2 static analysis). `queryId` matches `queries.j
   - `suggestion` (string \| null)
   - `evidence` (object \| null)
 
-## `plans.jsonl` (Phase 3)
+## `plans.json` (Phase 3)
 
-Emitted by `plan`. One JSON object per inventory row (same `queryId` order as processed from `queries.jsonl`).
+Emitted by `plan`. JSON array with one object per inventory row (same `queryId` order as processed from `queries.json`).
 
 - `queryId` (string)
 - `fingerprint` (string)
@@ -62,11 +62,11 @@ Emitted by `plan`. One JSON object per inventory row (same `queryId` order as pr
 - `skipReason` (string \| null) — e.g. `no_sql_text`, `not_select_only`, `max_queries_cap`, `would_capture_showplan`
 - `error` (string \| null) — capture / server message when `status` is `error`
 - `planXmlRelativePath` (string \| null) — e.g. `showplan-xml/q_abcd1234.xml` when `status` is `ok`
-- `findings` (array) — same shape as `suggestions.jsonl` findings (table scan, missing-index hint XML, etc.)
+- `findings` (array) — same shape as `suggestions.json` findings (table scan, missing-index hint XML, etc.)
 
-## `plan-suggestions.jsonl` (Phase 3)
+## `plan-suggestions.json` (Phase 3)
 
-Emitted by `plan`. One JSON object per inventory row, in the same shape as `suggestions.jsonl`, but populated from SHOWPLAN_XML analysis.
+Emitted by `plan`. JSON array in the same shape as `suggestions.json`, but populated from SHOWPLAN_XML analysis.
 
 - `queryId` (string)
 - `fingerprint` (string)

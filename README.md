@@ -1,60 +1,77 @@
-# SQL Repo Analyzer (C# + Node)
+# SQL Repo Analyzer
 
-Portable command-line tool to scan a cloned TypeScript repository, inventory SQL usage (including TypeORM), and generate JSONL reports for later optimization analysis against SQL Server.
+Simple CLI tool to:
 
-## Status
+1. Find SQL used in your codebase (`scan`)
+2. Generate static findings (`suggest`)
+3. Optionally capture SQL Server estimated plans (`plan`)
 
-This repo currently contains **Phase 1 (inventory)** + **Phase 2 (static suggestions)** + **Phase 3 (SHOWPLAN_XML, gated `plan`)**:
-
-- CLI commands: `scan`, `doctor`, `suggest`, `plan` (working), `report` (still minimal)
-- Structured logging to console + file
-- Output folder conventions (`.sqltool/`)
-- Bundled Node extractor placeholder under `assets/ts-extractor/`
+Outputs are written to `.sqltool/`.
 
 ## Requirements
 
-- .NET 10 SDK/runtime
-- Node.js (for TypeScript extraction; validated by `doctor`)
+- .NET SDK
+- Node.js
 
-## Backend profile (`manifest.backend`)
+## Use it the easy way
 
-Repos differ: some are **.NET-heavy**, some **Node-heavy**. `scan` records that choice in **`.sqltool/manifest.json`** so later steps (and future extractors) know what they’re dealing with.
-
-| Flag | Meaning |
-|------|---------|
-| `--backend csharp` | Primarily C# / .NET backend SQL patterns |
-| `--backend node` | Primarily Node / TypeScript backend SQL patterns |
-| `--backend mixed` | **Default** — both ecosystems matter (current `scan` still crawls `.sql` + TS/JS) |
-
-Example:
+Run from CLI project folder once:
 
 ```powershell
-dotnet run --project .\src\SqlRepoAnalyzer.Cli\SqlRepoAnalyzer.Cli.csproj -- scan --root . --out .sqltool --backend node
+Set-Location "c:\Users\NinadBandiwadekarIND\Repos\DB Optimization Tool\dbtool\src\SqlRepoAnalyzer.Cli"
 ```
 
-`suggest` and `plan` **rewrite** `manifest.json` but **keep** `backend` from the previous manifest when present.
+Then you can run `dotnet run -- ...` without `--project`.
 
-## Run
+## Quick start
 
 ```powershell
-dotnet build .\SqlRepoAnalyzer.sln
-npm --prefix .\assets\ts-extractor\ install
-dotnet run --project .\src\SqlRepoAnalyzer.Cli\SqlRepoAnalyzer.Cli.csproj -- doctor --out .sqltool --verbose
-dotnet run --project .\src\SqlRepoAnalyzer.Cli\SqlRepoAnalyzer.Cli.csproj -- scan --root . --out .sqltool
-dotnet run --project .\src\SqlRepoAnalyzer.Cli\SqlRepoAnalyzer.Cli.csproj -- scan --root . --out .sqltool --backend mixed
-dotnet run --project .\src\SqlRepoAnalyzer.Cli\SqlRepoAnalyzer.Cli.csproj -- suggest --root . --out .sqltool
-dotnet run --project .\src\SqlRepoAnalyzer.Cli\SqlRepoAnalyzer.Cli.csproj -- suggest --root . --out .sqltool --schema .\.sqltool\schema-snapshot.json
+# one-time setup
+dotnet build "c:\Users\NinadBandiwadekarIND\Repos\DB Optimization Tool\dbtool\SqlRepoAnalyzer.sln"
+npm --prefix "c:\Users\NinadBandiwadekarIND\Repos\DB Optimization Tool\dbtool\assets\ts-extractor" install
 
-# Phase 3: estimated plans (requires --enable-showplan; connection via env or --connection)
+# 1) check environment
+dotnet run -- doctor --out "c:\Users\NinadBandiwadekarIND\Repos\DB Optimization Tool\dbtool\.sqltool" --verbose
+
+# 2) inventory SQL
+dotnet run -- scan --root "c:\Users\NinadBandiwadekarIND\Repos\DB Optimization Tool\dbtool" --out "c:\Users\NinadBandiwadekarIND\Repos\DB Optimization Tool\dbtool\.sqltool"
+
+# 2b) inventory only static SELECT queries (exclude dynamic/no-SQL entries)
+dotnet run -- scan --root "c:\Users\NinadBandiwadekarIND\Repos\DB Optimization Tool\dbtool" --out "c:\Users\NinadBandiwadekarIND\Repos\DB Optimization Tool\dbtool\.sqltool" --query-scope select
+
+# 3) suggestions
+dotnet run -- suggest --root "c:\Users\NinadBandiwadekarIND\Repos\DB Optimization Tool\dbtool" --out "c:\Users\NinadBandiwadekarIND\Repos\DB Optimization Tool\dbtool\.sqltool"
+```
+
+## Optional plan capture
+
+`plan` needs `--enable-showplan` and a SQL Server connection string.
+
+```powershell
 $env:SQLTOOL_CONNECTION_STRING = "Server=localhost;Database=YourDb;Integrated Security=true;TrustServerCertificate=true"
-dotnet run --project .\src\SqlRepoAnalyzer.Cli\SqlRepoAnalyzer.Cli.csproj -- plan --root . --out .sqltool --enable-showplan --max-queries 20 --timeout-seconds 30
-# Preview which inventory rows would be sent (no DB round-trips for captures):
-dotnet run --project .\src\SqlRepoAnalyzer.Cli\SqlRepoAnalyzer.Cli.csproj -- plan --root . --out .sqltool --enable-showplan --dry-run
+dotnet run -- plan --root "c:\Users\NinadBandiwadekarIND\Repos\DB Optimization Tool\dbtool" --out "c:\Users\NinadBandiwadekarIND\Repos\DB Optimization Tool\dbtool\.sqltool" --enable-showplan --dry-run
 ```
 
-Outputs:
+Use `--dry-run` first to validate selection safely.
+
+## What each command does
+
+- `doctor`: checks output folder + Node installation
+- `scan`: creates `.sqltool/queries.json`
+- `suggest`: creates `.sqltool/suggestions.json`
+- `plan`: creates `.sqltool/plans.json` + `.sqltool/showplan-xml/*.xml`
+- `report`: placeholder/stub
+
+## Output files
 
 - `.sqltool/manifest.json`
-- `.sqltool/queries.jsonl`
-- `.sqltool/suggestions.jsonl`
-- `.sqltool/plans.jsonl` and `.sqltool/showplan-xml/*.xml` (after `plan`)
+- `.sqltool/queries.json`
+- `.sqltool/suggestions.json`
+- `.sqltool/plans.json` (after `plan`)
+- `.sqltool/plan-suggestions.json` (after `plan`)
+
+## Notes
+
+- `--verbose` = more detailed logs in terminal.
+- `--query-scope all|select` (scan only): `all` is default; `select` keeps only static SELECT-shaped SQL and excludes dynamic/no-SQL queries.
+- VS Code/Cursor tasks are available in `.vscode/tasks.json` (`doctor`, `scan`, `suggest`, `custom args`).

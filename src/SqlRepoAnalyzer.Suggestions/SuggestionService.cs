@@ -72,24 +72,19 @@ public static class SuggestionService
         return results;
     }
 
-    public static List<QueryRecord> ReadQueriesJsonl(string path)
+    public static List<QueryRecord> ReadQueriesJson(string path)
     {
-        var list = new List<QueryRecord>();
-        foreach (var line in File.ReadLines(path))
+        var json = File.ReadAllText(path);
+        var list = JsonSerializer.Deserialize<List<QueryRecord>>(json, new JsonSerializerOptions
         {
-            if (string.IsNullOrWhiteSpace(line)) continue;
-            var q = JsonSerializer.Deserialize<QueryRecord>(line, new JsonSerializerOptions
-            {
-                PropertyNameCaseInsensitive = true,
-                Converters = { new JsonStringEnumConverter() }
-            });
-            if (q is not null) list.Add(q);
-        }
-        return list;
+            PropertyNameCaseInsensitive = true,
+            Converters = { new JsonStringEnumConverter() }
+        });
+        return list ?? new List<QueryRecord>();
     }
 
-    public static void WriteSuggestionsJsonl(string path, IEnumerable<SuggestionRecord> records) =>
-        JsonlWriter.WriteJsonLines(path, records);
+    public static void WriteSuggestionsJson(string path, IEnumerable<SuggestionRecord> records) =>
+        JsonlWriter.WriteJsonArray(path, records);
 
     private static bool ShouldWarnPartial(QueryRecord q) =>
         string.Equals(q.Completeness, "partial", StringComparison.OrdinalIgnoreCase);

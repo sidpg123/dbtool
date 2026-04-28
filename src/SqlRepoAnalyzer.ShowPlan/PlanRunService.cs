@@ -6,7 +6,7 @@ namespace SqlRepoAnalyzer.ShowPlan;
 public static class PlanRunService
 {
     /// <summary>
-    /// Reads queries.jsonl, optionally captures SHOWPLAN_XML per SELECT-only query, writes showplan-xml/*.xml and plans.jsonl.
+    /// Reads queries.json, optionally captures SHOWPLAN_XML per SELECT-only query, writes showplan-xml/*.xml and plans.json.
     /// </summary>
     public static async Task<IReadOnlyList<PlanRecord>> RunAsync(PlanRunOptions options, CancellationToken cancellationToken)
     {
@@ -14,7 +14,7 @@ public static class PlanRunService
         var xmlDir = Path.Combine(options.OutDir, "showplan-xml");
         Directory.CreateDirectory(xmlDir);
 
-        var queries = SuggestionService.ReadQueriesJsonl(options.QueriesPath);
+        var queries = SuggestionService.ReadQueriesJson(options.QueriesPath);
         var results = new List<PlanRecord>(queries.Count);
         var serverAttempts = 0;
         var metadataCache = new MssqlIndexMetadataCache();
@@ -203,11 +203,11 @@ public static class PlanRunService
             });
         }
 
-        var plansPath = Path.Combine(options.OutDir, "plans.jsonl");
-        JsonlWriter.WriteJsonLines(plansPath, results);
+        var plansPath = Path.Combine(options.OutDir, "plans.json");
+        JsonlWriter.WriteJsonArray(plansPath, results);
 
-        var planSuggestionsPath = Path.Combine(options.OutDir, "plan-suggestions.jsonl");
-        JsonlWriter.WriteJsonLines(planSuggestionsPath, planSuggestions);
+        var planSuggestionsPath = Path.Combine(options.OutDir, "plan-suggestions.json");
+        JsonlWriter.WriteJsonArray(planSuggestionsPath, planSuggestions);
         return results;
     }
 

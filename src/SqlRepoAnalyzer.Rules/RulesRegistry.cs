@@ -7,16 +7,25 @@ public static class RulesRegistry
         new TsqlParseErrorRule(),
         new SelectStarRule(),
         new LeadingWildcardLikeRule(),
-        new UnknownTableReferenceRule(),
         new SqlStdMergeProhibitedRule(),
         new SqlStdCursorAvoidRule(),
         new SqlStdTruncateWarnRule(),
         new SqlStdNonSargablePredicateRule(),
         new SqlStdSchemaQualifiedObjectRule(),
         new SqlStdJoinRequiresAliasRule(),
+        new SqlStdColumnAliasQualifiedRule(),
+        new SqlStdBracketQuotedIdentifiersRule(),
         new SqlStdSnakeCaseIdentifierRule(),
         new SqlStdIndentTabsRule(),
         new SqlStdKeywordUppercaseRule(),
-        new SqlStdXactAbortRule()
+        new SqlStdXactAbortRule(),
+        new SqlStdSelectColumnSeparateLineRule(),
+        new SqlStdSelectModifierSameLineRule(),
+        new SqlStdPredicateSeparateLineRule(),
+        new SqlStdPreferCteOverNestedQueryRule(),
+        new SqlStdPreferTempTableOverTableVariableRule(),
+        new SqlStdObjectPrefixConventionRule(),
+        new SqlStdNamedConstraintRequiredRule(),
+        new SqlStdComplexJoinCommentRule()
     };
 }

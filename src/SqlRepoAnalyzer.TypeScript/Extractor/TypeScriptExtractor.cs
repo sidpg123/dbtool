@@ -26,11 +26,15 @@ public sealed class TypeScriptExtractor
         Directory.CreateDirectory(outDir);
         await File.WriteAllLinesAsync(listPath, files, ct);
 
-        var extractorPath = Path.Combine(AppContext.BaseDirectory, "assets", "ts-extractor", "extract.mjs");
-        if (!File.Exists(extractorPath))
+        var extractorPath = ResolveExtractorPath();
+        if (extractorPath is null)
         {
-            // During development, base directory may differ; try repo-relative as fallback.
-            extractorPath = Path.Combine(Directory.GetCurrentDirectory(), "assets", "ts-extractor", "extract.mjs");
+            _log.Error("TS extractor script not found", new Dictionary<string, object?>
+            {
+                ["baseDirectory"] = AppContext.BaseDirectory,
+                ["currentDirectory"] = Directory.GetCurrentDirectory()
+            });
+            return Array.Empty<QueryCandidate>();
         }
 
         var psi = new ProcessStartInfo
@@ -113,5 +117,30 @@ public sealed class TypeScriptExtractor
     {
         PropertyNameCaseInsensitive = true
     };
+
+    private static string? ResolveExtractorPath()
+    {
+        static string Candidate(string basePath) =>
+            Path.Combine(basePath, "assets", "ts-extractor", "extract.mjs");
+
+        var direct = Candidate(AppContext.BaseDirectory);
+        if (File.Exists(direct)) return direct;
+
+        var cwdDirect = Candidate(Directory.GetCurrentDirectory());
+        if (File.Exists(cwdDirect)) return cwdDirect;
+
+        foreach (var root in new[] { Directory.GetCurrentDirectory(), AppContext.BaseDirectory })
+        {
+            var probe = new DirectoryInfo(root);
+            while (probe is not null)
+            {
+                var candidate = Candidate(probe.FullName);
+                if (File.Exists(candidate)) return candidate;
+                probe = probe.Parent;
+            }
+        }
+
+        return null;
+    }
 }
 
