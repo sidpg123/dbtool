@@ -8,7 +8,6 @@
     <ProjectReference Include="..\SqlRepoAnalyzer.Core\SqlRepoAnalyzer.Core.csproj" />
     <ProjectReference Include="..\SqlRepoAnalyzer.TypeScript\SqlRepoAnalyzer.TypeScript.csproj" />
     <ProjectReference Include="..\SqlRepoAnalyzer.Suggestions\SqlRepoAnalyzer.Suggestions.csproj" />
-    <ProjectReference Include="..\SqlRepoAnalyzer.ShowPlan\SqlRepoAnalyzer.ShowPlan.csproj" />
   </ItemGroup>
 
   <ItemGroup>

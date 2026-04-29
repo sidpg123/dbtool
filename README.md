@@ -4,9 +4,9 @@ Simple CLI tool to:
 
 1. Find SQL used in your codebase (`scan`)
 2. Generate static findings (`suggest`)
-3. Optionally capture SQL Server estimated plans (`plan`)
+3. Run Phase 3 DB-connected checks (`plan`)
 
-Outputs are written to `.sqltool/`.
+Outputs are written to `.sqltool/` (JSON at the repo root of that folder; human-readable **Markdown** copies under `.sqltool/markdown/`).
 
 ## Requirements
 
@@ -39,39 +39,64 @@ dotnet run -- scan --root "c:\Users\NinadBandiwadekarIND\Repos\DB Optimization T
 # 2b) inventory only static SELECT queries (exclude dynamic/no-SQL entries)
 dotnet run -- scan --root "c:\Users\NinadBandiwadekarIND\Repos\DB Optimization Tool\dbtool" --out "c:\Users\NinadBandiwadekarIND\Repos\DB Optimization Tool\dbtool\.sqltool" --query-scope select
 
+**Scan notes:** `.sql` text is split on **semicolons** (script `GO` is also honored). Statements not separated by `;` stay in **one** inventory blob. **`--query-scope select`** keeps only fragments that parse as *only* static `SELECT`s; if a blob mixes `SELECT` + `MERGE` / `INSERT` / `DELETE` / etc., or you use `select` scope with almost no qualifying batches, `queries.json` can be **`[]`** even when the file obviously contains `SELECT`. Use default **`--query-scope all`** (or omit the flag) to inventory everything.
+
 # 3) suggestions
 dotnet run -- suggest --root "c:\Users\NinadBandiwadekarIND\Repos\DB Optimization Tool\dbtool" --out "c:\Users\NinadBandiwadekarIND\Repos\DB Optimization Tool\dbtool\.sqltool"
 ```
 
-## Optional plan capture
+## Phase 3 (`plan`)
 
-`plan` needs `--enable-showplan` and a SQL Server connection string.
+`plan` runs DB-connected checks using environment-based connection config from JSON.
+
+Command:
 
 ```powershell
-$env:SQLTOOL_CONNECTION_STRING = "Server=localhost;Database=YourDb;Integrated Security=true;TrustServerCertificate=true"
-dotnet run -- plan --root "c:\Users\NinadBandiwadekarIND\Repos\DB Optimization Tool\dbtool" --out "c:\Users\NinadBandiwadekarIND\Repos\DB Optimization Tool\dbtool\.sqltool" --enable-showplan --dry-run
+dotnet run -- plan --root "c:\path\to\target-repo" --out "c:\path\to\target-repo\.sqltool" --env dev
 ```
 
-Use `--dry-run` first to validate selection safely.
+Optional flags:
+
+- `--env <name>`: selects environment in DB config
+- `--db-config <path>`: override config path (default is `<outDir>\db-connections.json`)
+
+### DB connection config JSON
+
+Create `db-connections.json` under your output folder (for example `.sqltool/db-connections.json`):
+
+```json
+{
+  "defaultEnvironment": "dev",
+  "environments": {
+    "dev": {
+      "connectionString": "Server=localhost;Database=YourDb;Integrated Security=true;TrustServerCertificate=true"
+    },
+    "qa": {
+      "connectionString": "Server=qa-sql;Database=YourDb;User Id=app;Password=***;TrustServerCertificate=true"
+    }
+  }
+}
+```
+
+Detailed format reference: `docs/db-connections-format.md`.
+Checked-in sample template: `.sqltool/db-connections.example.json` (copy to `.sqltool/db-connections.json` and replace placeholder values).
 
 ## What each command does
 
 - `doctor`: checks output folder + Node installation
-- `scan`: creates `.sqltool/queries.json`
-- `suggest`: creates `.sqltool/suggestions.json`
-- `plan`: creates `.sqltool/plans.json` + `.sqltool/showplan-xml/*.xml`
+- `scan`: creates `.sqltool/queries.json` and `.sqltool/markdown/queries.md`
+- `suggest`: creates `.sqltool/suggestions.json` and `.sqltool/markdown/suggestions.md`
+- `plan`: creates `.sqltool/plans.json` and `.sqltool/markdown/plans.md` (DB-connected rule checks)
 - `report`: placeholder/stub
 
 ## Output files
 
 - `.sqltool/manifest.json`
-- `.sqltool/queries.json`
-- `.sqltool/suggestions.json`
-- `.sqltool/plans.json` (after `plan`)
-- `.sqltool/plan-suggestions.json` (after `plan`)
+- `.sqltool/queries.json`, `.sqltool/suggestions.json`, `.sqltool/plans.json` (after `plan`)
+- `.sqltool/markdown/*.md` — human-readable copies: `queries.md`, `suggestions.md`, `plans.md`
 
 ## Notes
 
 - `--verbose` = more detailed logs in terminal.
-- `--query-scope all|select` (scan only): `all` is default; `select` keeps only static SELECT-shaped SQL and excludes dynamic/no-SQL queries.
+- `--query-scope all|select` (scan only): default `all` inventories all extracted SQL. `select` keeps only fragments whose parse tree is purely static SELECT statements—mixed DDL/DML/multiple verbs in one **unsplit** fragment are dropped; omit the flag when you see an empty inventory but know SQL exists (see Quick start note).
 - VS Code/Cursor tasks are available in `.vscode/tasks.json` (`doctor`, `scan`, `suggest`, `custom args`).

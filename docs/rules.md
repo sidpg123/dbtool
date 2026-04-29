@@ -5,9 +5,10 @@ This document lists the rules currently implemented by the rule engine used by t
 Notes:
 - Most rules run on **parsed T‑SQL AST** (ScriptDom). If parsing fails, AST-based rules typically do not run.
 - Some rules are **text heuristics** (they scan raw `sqlText`), which can produce false positives (for example inside string literals).
-- Only the rules labeled **Schema required** need `suggest --schema ...`.
 
-## Baseline rules (already present)
+---
+
+## Baseline rule
 
 ### `tsql.parse_error`
 - **Purpose**: Report when `sqlText` could not be parsed as T‑SQL.
@@ -15,38 +16,64 @@ Notes:
 - **Schema required**: No.
 - **Output**: Warn with first ScriptDom parse error location/message.
 
-### `sql.select_star`
-- **Purpose**: Detect `SELECT *`.
-- **Type**: AST.
+---
+
+## Core query optimization rules (Phase 2)
+
+These rules directly affect whether SQL can use indexes effectively (sargability, shape of reads/writes). Review them alongside DB-connected checks in **`plan`** (see **`docs/rules-requiring-db-connection.md`**).
+
+| Rule ID | Focus |
+|---------|--------|
+| `sql.std.non_sargable_predicate` | Predicates that often block seeks |
+| `sql.like_leading_wildcard` | `LIKE` patterns that usually cannot use indexes on the leading column |
+| `sql.select_star` | Over-fetching columns (more I/O, harder covering indexes) |
+| `sql.std.cursor_avoid` | Row-by-row processing instead of set-based SQL |
+| `sql.std.merge_prohibited` | `MERGE` complexity and locking behavior (standards / safety) |
+
+### `sql.std.non_sargable_predicate`
+- **Purpose**: Heuristically flag functions, casts, and similar constructs inside `WHERE`, `HAVING`, or join `ON` predicates that often prevent or limit index seeks (non-sargable patterns).
+- **Type**: AST (heuristic).
 - **Schema required**: No.
+- **Why it matters for optimization**: Even with a perfect index, wrapping a column in a function (e.g. `YEAR(col) = …`) can force scans or residual filters instead of efficient seeks.
+- **Output**: Warning finding with location when matched.
+- **Limitations**: Intentionally conservative; may miss real issues or flag rare false positives. Does not know which columns are indexed or actual execution plans.
 
 ### `sql.like_leading_wildcard`
-- **Purpose**: Detect `LIKE` patterns starting with `%` or `_` (often non-sargable).
+- **Purpose**: Detect `LIKE` patterns that start with `%` or `_`, which generally prevent use of a normal B-tree index on that column’s leading edge.
 - **Type**: AST.
 - **Schema required**: No.
+- **Why it matters for optimization**: Leading wildcards usually imply scans or heavy filtering unless specialized indexes (e.g. full-text) apply.
+- **Output**: Warning finding.
 
-## SQL coding-standard rules (added)
-
-### `sql.std.merge_prohibited`
-- **Purpose**: Flag `MERGE` statements (prohibited by standard).
+### `sql.select_star`
+- **Purpose**: Detect `SELECT *` (and trivial variants exposed in AST).
 - **Type**: AST.
 - **Schema required**: No.
+- **Why it matters for optimization**: Pulls every column instead of projection needed by the caller; increases I/O and makes narrow covering indexes ineffective.
+- **Output**: Warning finding.
 
 ### `sql.std.cursor_avoid`
-- **Purpose**: Flag cursor usage (DECLARE/OPEN/FETCH/CLOSE/DEALLOCATE).
+- **Purpose**: Flag T-SQL cursor usage (`DECLARE CURSOR`, `OPEN`, `FETCH`, `CLOSE`, `DEALLOCATE`, and related patterns the rule detects).
 - **Type**: AST.
 - **Schema required**: No.
+- **Why it matters for optimization**: Row-by-row processing scales poorly versus set-based joins/aggregates and can multiply round-trips or locks under load.
+- **Output**: Warning finding.
+
+### `sql.std.merge_prohibited`
+- **Purpose**: Flag `MERGE` statements when your coding standard prohibits them (complex semantics, concurrency, and tooling concerns).
+- **Type**: AST.
+- **Schema required**: No.
+- **Why it matters for optimization / operations**: Merge plans can differ from INSERT/UPDATE/DELETE equivalents; banning `MERGE` is often a consistency and reviewability choice rather than purely one seek vs scan.
+- **Output**: Warning finding.
+
+---
+
+## Other SQL coding-standard rules
 
 ### `sql.std.truncate_caution`
 - **Purpose**: Warn on `TRUNCATE TABLE` usage (caution for large data / truncate-reload patterns).
 - **Type**: AST.
 - **Schema required**: No.
-
-### `sql.std.non_sargable_predicate`
-- **Purpose**: Heuristically flag functions/casts inside `WHERE`, `HAVING`, or join `ON` predicates that often reduce sargability.
-- **Type**: AST (heuristic).
-- **Schema required**: No.
-- **Limitations**: This is intentionally conservative and may produce false positives/negatives; it does not know which columns are indexed.
 
 ### `sql.std.schema_qualified_object`
 - **Purpose**: Prefer two-part naming for table/view references (`[schema].[object]`).
@@ -137,9 +164,10 @@ Notes:
 - **Type**: Text heuristic.
 - **Schema required**: No.
 
+---
+
 ## Where these rules run
 
-- **Phase 2 (`suggest`)**: runs all rules in `SqlRepoAnalyzer.Rules.RulesRegistry.DefaultRules`.
-- **Phase 3 (`plan`)**: does not run these rules directly; it analyzes `SHOWPLAN_XML` and emits plan findings separately.
-- **DB-connection-dependent standards**: tracked separately in `docs/rules-requiring-db-connection.md` (includes `schema.unknown_table`).
-
+- **Phase 2 (`suggest`)**: Runs all rules in **`SqlRepoAnalyzer.Rules.RulesRegistry.DefaultRules`**.
+- **Phase 3 (`plan`)**: DB-connected checks only (index/schema/trigger/metadata); outputs **`plans.json`** (automation) and **`markdown/plans.md`** (DBA-readable summary). Combine with **`suggest`** when tuning queries.
+- **DB-connection-dependent standards**: Tracked separately in **`docs/rules-requiring-db-connection.md`** (Phase 3 rules such as covering index suitability and indexed objects).

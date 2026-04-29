@@ -42,5 +42,12 @@ public static class JsonlWriter
 
     public static void WriteJsonArray<T>(string path, IEnumerable<T> items) =>
         WritePrettyJsonArray(path, items);
+
+    public static void WriteJsonObject<T>(string path, T item)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        var json = JsonSerializer.Serialize(item, PrettyOptions);
+        File.WriteAllText(path, json);
+    }
 }
 

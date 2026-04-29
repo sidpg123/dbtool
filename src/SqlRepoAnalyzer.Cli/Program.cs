@@ -5,11 +5,12 @@ using SqlRepoAnalyzer.Core.Crawl;
 using SqlRepoAnalyzer.Core.Queries;
 using SqlRepoAnalyzer.Core.Reports;
 using SqlRepoAnalyzer.Core.SqlFiles;
-using SqlRepoAnalyzer.Core.Schema;
+using SqlRepoAnalyzer.Core.Phase3;
+using SqlRepoAnalyzer.Core.Tsql;
+using Microsoft.SqlServer.TransactSql.ScriptDom;
 using SqlRepoAnalyzer.TypeScript.Node;
 using SqlRepoAnalyzer.TypeScript.Extractor;
 using SqlRepoAnalyzer.Suggestions;
-using SqlRepoAnalyzer.ShowPlan;
 
 internal static class Program
 {
@@ -50,17 +51,17 @@ SqlRepoAnalyzer - SQL inventory & suggestions tool
 Usage:
   SqlRepoAnalyzer doctor --out <dir>
   SqlRepoAnalyzer scan --root <repoRoot> [--out <dir>] [--backend csharp|node|mixed] [--query-scope all|select]
-  SqlRepoAnalyzer suggest --root <repoRoot> [--out <dir>] [--queries <path>] [--schema <path>] [--rules-version <string>]
-  SqlRepoAnalyzer plan --root <repoRoot> [--out <dir>] --enable-showplan [--allow-dml] [--connection <cs>] [--queries <path>] [--timeout-seconds <n>] [--max-queries <n>] [--dry-run]
+  SqlRepoAnalyzer suggest --root <repoRoot> [--out <dir>] [--queries <path>] [--rules-version <string>]
+  SqlRepoAnalyzer plan --root <repoRoot> [--out <dir>] [--queries <path>] [--db-config <path>] [--env <name>]
   SqlRepoAnalyzer report --out <dir>                        (stub; richer summaries planned)
 
 Phase 2:
   - doctor runs environment checks (Node presence/version, out dir writable)
-  - scan writes manifest + queries.json (SQL inventory)
-  - suggest reads queries.json and writes suggestions.json (static rules + ScriptDom parse)
+  - scan writes manifest + queries.json (SQL inventory) and markdown/queries.md
+  - suggest reads queries.json and writes suggestions.json + markdown/suggestions.md
 
 Phase 3:
-  - plan captures SHOWPLAN_XML for SELECT-only inventory rows by default (gated; requires --enable-showplan; connection via --connection or SQLTOOL_CONNECTION_STRING). Use --allow-dml to also allow INSERT/UPDATE/DELETE/MERGE.
+  - plan runs DB-connected checks using db-connections.json and writes plans.json + markdown/plans.md
 """);
     }
 
@@ -266,12 +267,25 @@ Phase 3:
             candidates = candidates
                 .Where(c => !string.IsNullOrWhiteSpace(c.SqlText))
                 .Where(c => c.SourceKind != SourceKind.TypeOrmQueryDynamic)
-                .Where(c => SelectOnlyValidator.IsEligibleForShowPlan(c.SqlText!, allowDml: false, out _))
+                .Where(c => IsSelectOnlyCandidate(c.SqlText!))
                 .ToList();
+        }
+
+        if (string.Equals(queryScope, "select", StringComparison.OrdinalIgnoreCase)
+            && preFilterCandidateCount > 0
+            && candidates.Count == 0)
+        {
+            log.Warn(
+                "scan: query-scope select removed every candidate. Inventory will be empty. Use default scope (omit flag or use --query-scope all), or terminate statements with semicolons so each fragment is ONLY static SELECTs (mixed MERGE/INSERT/DELETE/select without ';' binds into one blob and fails the filter).",
+                new Dictionary<string, object?>
+                {
+                    ["candidatesBeforeSelectScopeFilter"] = preFilterCandidateCount
+                });
         }
 
         var records = QueryMerger.MergeAndFingerprint(repoRoot, candidates);
         JsonlWriter.WriteJsonArray(paths.QueriesPath, records);
+        QueriesMarkdownFormatter.WriteUtf8File(paths.QueriesMarkdownPath, records, DateTimeOffset.UtcNow.ToString("o"));
 
         var counts = new Dictionary<string, object?>
         {
@@ -297,7 +311,6 @@ Phase 3:
             OutDir: outDir,
             GitSha: null,
             RulesVersion: null,
-            SchemaFingerprint: null,
             Backend: backend,
             Config: counts
         ));
@@ -305,7 +318,8 @@ Phase 3:
         log.Info("Scan complete", new Dictionary<string, object?>
         {
             ["manifest"] = paths.ManifestPath,
-            ["queries"] = paths.QueriesPath
+            ["queries"] = paths.QueriesPath,
+            ["queriesMarkdown"] = paths.QueriesMarkdownPath
         });
         return await Task.FromResult(0);
     }
@@ -319,14 +333,13 @@ Phase 3:
             logFilePath: paths.LogPath,
             minFileLevel: LogLevel.Debug);
 
-        var (queriesPath, schemaPath, rulesVersion) = ParseSuggestArgs(args, paths);
+        var (queriesPath, rulesVersion) = ParseSuggestArgs(args, paths);
 
         log.Info("Suggest start", new Dictionary<string, object?>
         {
             ["repoRoot"] = repoRoot,
             ["outDir"] = outDir,
             ["queries"] = queriesPath,
-            ["schema"] = schemaPath ?? "(none)",
             ["rulesVersion"] = rulesVersion
         });
 
@@ -338,30 +351,10 @@ Phase 3:
             return 1;
         }
 
-        SchemaSnapshot? schema = null;
-        string? schemaFingerprint = null;
-        if (!string.IsNullOrWhiteSpace(schemaPath))
-        {
-            try
-            {
-                schema = SchemaSnapshotLoader.Load(schemaPath);
-                schemaFingerprint = SchemaSnapshotFingerprinter.Sha256Hex(schema);
-                log.Info("Schema snapshot loaded", new Dictionary<string, object?>
-                {
-                    ["schemaPath"] = schemaPath,
-                    ["schemaFingerprint"] = schemaFingerprint
-                });
-            }
-            catch (Exception ex)
-            {
-                log.Error("Failed to load schema snapshot", new Dictionary<string, object?> { ["schemaPath"] = schemaPath! }, ex);
-                return 1;
-            }
-        }
-
         var queries = SuggestionService.ReadQueriesJson(queriesPath);
-        var suggestions = SuggestionService.BuildSuggestions(queries, schema);
+        var suggestions = SuggestionService.BuildSuggestions(queries);
         SuggestionService.WriteSuggestionsJson(paths.SuggestionsPath, suggestions);
+        SuggestionsMarkdownFormatter.WriteUtf8File(paths.SuggestionsMarkdownPath, suggestions, DateTimeOffset.UtcNow.ToString("o"));
 
         var preservedBackend = ManifestReader.TryReadBackend(paths.ManifestPath);
 
@@ -373,14 +366,11 @@ Phase 3:
             OutDir: outDir,
             GitSha: null,
             RulesVersion: rulesVersion,
-            SchemaFingerprint: schemaFingerprint,
             Backend: preservedBackend,
             Config: new Dictionary<string, object?>
             {
                 ["phase"] = 2,
                 ["rulesVersion"] = rulesVersion,
-                ["schemaPath"] = schemaPath,
-                ["schemaFingerprint"] = schemaFingerprint,
                 ["queryCount"] = queries.Count,
                 ["suggestionCount"] = suggestions.Count
             }
@@ -388,15 +378,15 @@ Phase 3:
 
         log.Info("Suggest complete", new Dictionary<string, object?>
         {
-            ["suggestions"] = paths.SuggestionsPath
+            ["suggestions"] = paths.SuggestionsPath,
+            ["suggestionsMarkdown"] = paths.SuggestionsMarkdownPath
         });
         return 0;
     }
 
-    static (string queriesPath, string? schemaPath, string rulesVersion) ParseSuggestArgs(string[] args, OutputPaths defaults)
+    static (string queriesPath, string rulesVersion) ParseSuggestArgs(string[] args, OutputPaths defaults)
     {
         string queriesPath = defaults.QueriesPath;
-        string? schemaPath = null;
         var rulesVersion = "0.2.0";
 
         for (var i = 0; i < args.Length; i++)
@@ -406,16 +396,13 @@ Phase 3:
                 case "--queries":
                     queriesPath = Path.GetFullPath(args[++i]);
                     break;
-                case "--schema":
-                    schemaPath = Path.GetFullPath(args[++i]);
-                    break;
                 case "--rules-version":
                     rulesVersion = args[++i];
                     break;
             }
         }
 
-        return (queriesPath, schemaPath, rulesVersion);
+        return (queriesPath, rulesVersion);
     }
 
     static async Task<int> RunPlan(string[] args)
@@ -427,91 +414,116 @@ Phase 3:
             logFilePath: paths.LogPath,
             minFileLevel: LogLevel.Debug);
 
-        var options = ParsePlanArgs(args, paths);
-
-        if (!options.EnableShowplanAcknowledged)
-        {
-            Console.Error.WriteLine(
-                "Refusing to run: `plan` touches a live SQL Server (compile-only SHOWPLAN_XML for SELECT-shaped text). " +
-                "Re-run with --enable-showplan after you intend to run this against the given connection.");
-            return 2;
-        }
+        var (queriesPath, dbConfigPath, envName) = ParsePlanArgs(args, paths);
 
         log.Info("Plan start", new Dictionary<string, object?>
         {
             ["repoRoot"] = repoRoot,
             ["outDir"] = outDir,
-            ["queries"] = options.QueriesPath,
-            ["dryRun"] = options.DryRun,
-            ["maxQueries"] = options.MaxQueries,
-            ["timeoutSeconds"] = options.CommandTimeoutSeconds,
-            ["connection"] = string.IsNullOrWhiteSpace(options.ConnectionString)
-                ? "(none)"
-                : ShowPlanConnection.Describe(options.ConnectionString)
+            ["queries"] = queriesPath,
+            ["dbConfig"] = dbConfigPath,
+            ["env"] = envName ?? "(default)"
         });
 
         Directory.CreateDirectory(outDir);
 
-        if (!File.Exists(options.QueriesPath))
+        if (!File.Exists(queriesPath))
         {
-            log.Error("queries.json not found", new Dictionary<string, object?> { ["queries"] = options.QueriesPath });
+            log.Error("queries.json not found", new Dictionary<string, object?> { ["queries"] = queriesPath });
             return 1;
         }
 
-        if (!options.DryRun && string.IsNullOrWhiteSpace(options.ConnectionString))
+        if (!File.Exists(dbConfigPath))
         {
-            log.Error("Missing connection string for plan. Use --connection \"...\" or set environment variable SQLTOOL_CONNECTION_STRING.");
+            log.Error("DB config file not found", new Dictionary<string, object?> { ["dbConfig"] = dbConfigPath });
             return 1;
         }
 
-        var records = await PlanRunService.RunAsync(options, CancellationToken.None).ConfigureAwait(false);
-        var ok = records.Count(r => string.Equals(r.Status, "ok", StringComparison.OrdinalIgnoreCase));
+        Phase3DbConfig config;
+        string resolvedEnv;
+        string connectionString;
+        try
+        {
+            config = Phase3DbConfigLoader.Load(dbConfigPath);
+            (resolvedEnv, connectionString) = Phase3DbConfigLoader.ResolveConnection(config, envName);
+        }
+        catch (Exception ex)
+        {
+            log.Error("Failed to resolve DB connection from config", new Dictionary<string, object?>
+            {
+                ["dbConfig"] = dbConfigPath,
+                ["env"] = envName ?? "(default)"
+            }, ex);
+            return 1;
+        }
+
+        var queries = SuggestionService.ReadQueriesJson(queriesPath);
+        Phase3PlansReport report;
+        try
+        {
+            report = await Phase3DbRuleService.RunAsync(resolvedEnv, connectionString, queries, log, CancellationToken.None)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            log.Error("Phase3 DB checks failed", new Dictionary<string, object?>
+            {
+                ["environment"] = resolvedEnv,
+                ["dbConfig"] = dbConfigPath
+            }, ex);
+            return 1;
+        }
+        JsonlWriter.WriteJsonObject(paths.PlansPath, report);
+        Phase3PlansMarkdownFormatter.WriteUtf8File(paths.PlansMarkdownPath, report);
 
         var planPreservedBackend = ManifestReader.TryReadBackend(paths.ManifestPath);
 
         ManifestWriter.WriteManifest(paths.ManifestPath, new ManifestRecord(
             ReportSchemaVersion: 3,
-            ToolVersion: "0.3.0-phase3",
+            ToolVersion: "0.3.0-phase3-dbchecks",
             GeneratedAtUtc: DateTimeOffset.UtcNow.ToString("o"),
             RepoRoot: repoRoot,
             OutDir: outDir,
             GitSha: null,
             RulesVersion: null,
-            SchemaFingerprint: null,
             Backend: planPreservedBackend,
             Config: new Dictionary<string, object?>
             {
                 ["phase"] = 3,
-                ["planDryRun"] = options.DryRun,
-                ["planRecordCount"] = records.Count,
-                ["planOkCount"] = ok,
-                ["queriesPath"] = options.QueriesPath,
-                ["connectionSummary"] = string.IsNullOrWhiteSpace(options.ConnectionString)
-                    ? null
-                    : ShowPlanConnection.Describe(options.ConnectionString)
+                ["queriesPath"] = queriesPath,
+                ["dbConfigPath"] = dbConfigPath,
+                ["environment"] = report.Environment,
+                ["connectionSummary"] = report.ConnectionSummary,
+                ["queryCount"] = report.QueryCount,
+                ["totalRules"] = report.TotalRules,
+                ["totalFindings"] = report.TotalFindings,
+                ["ruleCounts"] = report.ByRule.Select(r => new Dictionary<string, object?>
+                {
+                    ["ruleId"] = r.RuleId,
+                    ["pass"] = r.Pass,
+                    ["warn"] = r.Warn,
+                    ["fail"] = r.Fail,
+                    ["error"] = r.Error
+                }).ToList()
             }
         ));
 
         log.Info("Plan complete", new Dictionary<string, object?>
         {
             ["plans"] = paths.PlansPath,
-            ["planSuggestions"] = paths.PlanSuggestionsPath,
-            ["showplanXmlDir"] = paths.ShowPlanXmlDirectory,
-            ["okCount"] = ok
+            ["plansMarkdown"] = paths.PlansMarkdownPath,
+            ["environment"] = report.Environment,
+            ["totalFindings"] = report.TotalFindings
         });
 
-        return 0;
+        return await Task.FromResult(0);
     }
 
-    static PlanRunOptions ParsePlanArgs(string[] args, OutputPaths defaults)
+    static (string queriesPath, string dbConfigPath, string? envName) ParsePlanArgs(string[] args, OutputPaths defaults)
     {
         var queriesPath = defaults.QueriesPath;
-        var connection = Environment.GetEnvironmentVariable("SQLTOOL_CONNECTION_STRING");
-        var timeout = 30;
-        var maxQueries = 50;
-        var enable = false;
-        var allowDml = false;
-        var dryRun = false;
+        var dbConfigPath = defaults.DbConnectionsPath;
+        string? envName = null;
 
         for (var i = 0; i < args.Length; i++)
         {
@@ -520,39 +532,16 @@ Phase 3:
                 case "--queries":
                     queriesPath = Path.GetFullPath(args[++i]);
                     break;
-                case "--connection":
-                    connection = args[++i];
+                case "--db-config":
+                    dbConfigPath = Path.GetFullPath(args[++i]);
                     break;
-                case "--timeout-seconds":
-                    timeout = int.TryParse(args[++i], out var t) ? t : 30;
-                    break;
-                case "--max-queries":
-                    maxQueries = int.TryParse(args[++i], out var m) ? m : 50;
-                    break;
-                case "--enable-showplan":
-                    enable = true;
-                    break;
-                case "--allow-dml":
-                    allowDml = true;
-                    break;
-                case "--dry-run":
-                    dryRun = true;
+                case "--env":
+                    envName = args[++i];
                     break;
             }
         }
 
-        timeout = Math.Clamp(timeout, 1, 600);
-        maxQueries = Math.Clamp(maxQueries, 1, 10_000);
-
-        return new PlanRunOptions(
-            QueriesPath: queriesPath,
-            OutDir: defaults.OutDir,
-            ConnectionString: string.IsNullOrWhiteSpace(connection) ? null : connection,
-            CommandTimeoutSeconds: timeout,
-            MaxQueries: maxQueries,
-            EnableShowplanAcknowledged: enable,
-            AllowDml: allowDml,
-            DryRun: dryRun);
+        return (queriesPath, dbConfigPath, envName);
     }
 
     static int RunReport(string[] args)
@@ -580,12 +569,42 @@ Phase 3:
 
         log.Warn("Report is a stub (summaries/formatting planned)");
         Console.WriteLine($"outDir={paths.OutDir}");
+        Console.WriteLine($"markdownDir={paths.MarkdownDir}");
         Console.WriteLine($"manifest={paths.ManifestPath}");
         Console.WriteLine($"queries={paths.QueriesPath}");
+        Console.WriteLine($"queriesMd={paths.QueriesMarkdownPath}");
         Console.WriteLine($"suggestions={paths.SuggestionsPath}");
+        Console.WriteLine($"suggestionsMd={paths.SuggestionsMarkdownPath}");
         Console.WriteLine($"plans={paths.PlansPath}");
-        Console.WriteLine($"planSuggestions={paths.PlanSuggestionsPath}");
-        Console.WriteLine($"showplanXml={paths.ShowPlanXmlDirectory}");
+        Console.WriteLine($"plansMd={paths.PlansMarkdownPath}");
         return 0;
+    }
+
+    static bool IsSelectOnlyCandidate(string sql)
+    {
+        var parse = TsqlParser.Parse(sql);
+        if (!parse.Success || parse.Fragment is not TSqlScript script) return false;
+        if (script.Batches is null || script.Batches.Count == 0) return false;
+
+        var hasSelect = false;
+        foreach (var batch in script.Batches)
+        {
+            foreach (var stmt in batch.Statements)
+            {
+                switch (stmt)
+                {
+                    case SelectStatement:
+                        hasSelect = true;
+                        break;
+                    case SetOnOffStatement:
+                    case SetTransactionIsolationLevelStatement:
+                        break;
+                    default:
+                        return false;
+                }
+            }
+        }
+
+        return hasSelect;
     }
 }

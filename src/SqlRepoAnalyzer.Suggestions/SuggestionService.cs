@@ -2,7 +2,6 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using SqlRepoAnalyzer.Core.Queries;
 using SqlRepoAnalyzer.Core.Reports;
-using SqlRepoAnalyzer.Core.Schema;
 using SqlRepoAnalyzer.Core.Tsql;
 using SqlRepoAnalyzer.Rules;
 
@@ -12,11 +11,9 @@ public static class SuggestionService
 {
     public static IReadOnlyList<SuggestionRecord> BuildSuggestions(
         IReadOnlyList<QueryRecord> queries,
-        SchemaSnapshot? schemaSnapshot,
         IReadOnlyList<IRule>? rules = null)
     {
         rules ??= RulesRegistry.DefaultRules;
-        var schemaModel = schemaSnapshot is null ? null : new SchemaModel(schemaSnapshot);
 
         var results = new List<SuggestionRecord>(queries.Count);
         foreach (var q in queries)
@@ -46,7 +43,6 @@ public static class SuggestionService
             var ctx = new RuleContext
             {
                 Query = q,
-                Schema = schemaModel,
                 Parse = parse
             };
 
