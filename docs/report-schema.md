@@ -33,7 +33,7 @@ JSON array of query inventory records. A readable copy is also emitted as **`mar
 - `queryId` (string)
 - `fingerprint` (string)
 - `sqlText` (string \| null)
-- `sourceKind` (string enum name, for example `SqlFile`, `TypeOrmRawQuery`)
+- `sourceKind` (string enum name, for example `SqlFile`, `CSharpEmbeddedSql`, `TypeOrmRawQuery`)
 - `completeness` (string \| null)
 - `occurrences` (array)
   - `filePath` (string, repo-relative when possible)

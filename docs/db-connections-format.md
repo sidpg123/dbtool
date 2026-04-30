@@ -2,13 +2,15 @@
 
 Phase 3 (`plan`) reads DB connections from JSON. Connection strings are not passed in CLI args.
 
-## Default path
+## Where `plan` loads the file
 
-- `<outDir>/db-connections.json`  
-  Example: `.sqltool/db-connections.json`
-- Sample template in repo: `.sqltool/db-connections.example.json`
+Resolution order:
 
-Use `--db-config <path>` to override.
+1. **`--db-config <path>`** — use that file (must exist).
+2. **`<outDir>/db-connections.json`** — e.g. `.sqltool/db-connections.json` next to `queries.json` (typical for **per-repo secrets** committed or gitignored).
+3. **Bundled template** — `db-connections.json` copied next to `SqlRepoAnalyzer.dll` when you build or publish the tool (placeholder `localhost`-style connection only).
+
+If you do not need a separate file in the scanned repo, omit (2) and the tool uses (3). Override with (1) for CI secrets or non-default locations.
 
 ## Environment selection
 

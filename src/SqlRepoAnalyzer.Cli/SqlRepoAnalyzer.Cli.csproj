@@ -17,4 +17,8 @@
   <ItemGroup>
     <None Include="..\..\docs\**\*" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
+
+  <ItemGroup>
+    <None Include="db-connections.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

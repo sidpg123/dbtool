@@ -56,12 +56,12 @@ Usage:
   SqlRepoAnalyzer report --out <dir>                        (stub; richer summaries planned)
 
 Phase 2:
-  - doctor runs environment checks (Node presence/version, out dir writable)
-  - scan writes manifest + queries.json (SQL inventory) and markdown/queries.md
+  - doctor runs environment checks (Node presence/version when JS/TS is crawled; out dir writable)
+  - scan writes manifest + queries.json (inventory from .sql, verbatim SQL in .cs, TypeScript/JavaScript extractors) and markdown/queries.md
   - suggest reads queries.json and writes suggestions.json + markdown/suggestions.md
 
 Phase 3:
-  - plan runs DB-connected checks using db-connections.json and writes plans.json + markdown/plans.md
+  - plan runs DB-connected checks (db-connections.json: --db-config, else <out>/db-connections.json, else tool-bundled template) and writes plans.json + markdown/plans.md
 """);
     }
 
@@ -222,26 +222,35 @@ Phase 3:
         });
         Directory.CreateDirectory(outDir);
 
-        var node = await NodeTooling.CheckNodeAsync(log, CancellationToken.None);
-        if (!node.Ok)
-        {
-            log.Error("Node check failed (required for TS extraction). Run doctor for details.", new Dictionary<string, object?> { ["error"] = node.Error });
-            return 1;
-        }
-
         var crawlOptions = new CrawlOptions(
             RepoRoot: repoRoot,
             MaxFileSizeBytes: 500 * 1024,
-            IncludeExtensions: new[] { ".ts", ".tsx", ".js", ".jsx", ".sql" },
-            ExcludeDirNames: new[] { "node_modules", "dist", "build", ".git", ".sqltool" }
+            IncludeExtensions: new[] { ".ts", ".tsx", ".js", ".jsx", ".sql", ".cs" },
+            ExcludeDirNames: new[] { "node_modules", "dist", "build", "bin", "obj", ".git", ".sqltool" }
         );
         var allFiles = FileCrawler.EnumerateFiles(crawlOptions).ToList();
         var sqlFiles = allFiles.Where(f => Path.GetExtension(f).Equals(".sql", StringComparison.OrdinalIgnoreCase)).ToList();
+        var csFiles = allFiles.Where(f => Path.GetExtension(f).Equals(".cs", StringComparison.OrdinalIgnoreCase)).ToList();
         var tsFiles = allFiles.Where(f =>
             Path.GetExtension(f).Equals(".ts", StringComparison.OrdinalIgnoreCase) ||
             Path.GetExtension(f).Equals(".tsx", StringComparison.OrdinalIgnoreCase) ||
             Path.GetExtension(f).Equals(".js", StringComparison.OrdinalIgnoreCase) ||
             Path.GetExtension(f).Equals(".jsx", StringComparison.OrdinalIgnoreCase)).ToList();
+
+        var needsNode = tsFiles.Count > 0;
+        if (needsNode)
+        {
+            var node = await NodeTooling.CheckNodeAsync(log, CancellationToken.None).ConfigureAwait(false);
+            if (!node.Ok)
+            {
+                log.Error("Node check failed (required for TypeScript/JavaScript extraction). Run doctor for details.", new Dictionary<string, object?> { ["error"] = node.Error });
+                return 1;
+            }
+        }
+        else
+        {
+            log.Info("Skipping Node check (no .ts/.tsx/.js/.jsx files in crawl scope)", null);
+        }
 
         var candidates = new List<QueryCandidate>();
 
@@ -257,9 +266,24 @@ Phase 3:
             }
         }
 
-        var tsExtractor = new TypeScriptExtractor(log);
-        var tsCandidates = await tsExtractor.ExtractAsync(repoRoot, outDir, tsFiles, CancellationToken.None);
-        candidates.AddRange(tsCandidates);
+        foreach (var cf in csFiles)
+        {
+            try
+            {
+                candidates.AddRange(CSharpEmbeddedSqlExtractor.ExtractFromFile(cf));
+            }
+            catch (Exception ex)
+            {
+                log.Warn("Failed to extract from .cs file", new Dictionary<string, object?> { ["file"] = cf }, ex);
+            }
+        }
+
+        if (needsNode)
+        {
+            var tsExtractor = new TypeScriptExtractor(log);
+            var tsCandidates = await tsExtractor.ExtractAsync(repoRoot, outDir, tsFiles, CancellationToken.None).ConfigureAwait(false);
+            candidates.AddRange(tsCandidates);
+        }
 
         var preFilterCandidateCount = candidates.Count;
         if (string.Equals(queryScope, "select", StringComparison.OrdinalIgnoreCase))
@@ -295,6 +319,7 @@ Phase 3:
             ["excludedDirNames"] = crawlOptions.ExcludeDirNames,
             ["crawledFileCount"] = allFiles.Count,
             ["sqlFileCount"] = sqlFiles.Count,
+            ["csFileCount"] = csFiles.Count,
             ["tsFileCount"] = tsFiles.Count,
             ["candidateCountBeforeQueryScopeFilter"] = preFilterCandidateCount,
             ["candidateCount"] = candidates.Count,
@@ -414,7 +439,19 @@ Phase 3:
             logFilePath: paths.LogPath,
             minFileLevel: LogLevel.Debug);
 
-        var (queriesPath, dbConfigPath, envName) = ParsePlanArgs(args, paths);
+        var (queriesPath, explicitDbConfigPath, envName) = ParsePlanArgs(args, paths);
+
+        string dbConfigPath;
+        string dbConfigSource;
+        try
+        {
+            (dbConfigPath, dbConfigSource) = Phase3DbConnectionsPathResolver.Resolve(explicitDbConfigPath, paths.DbConnectionsPath);
+        }
+        catch (FileNotFoundException ex)
+        {
+            log.Error(ex.Message, new Dictionary<string, object?> { ["outDirConfig"] = paths.DbConnectionsPath });
+            return 1;
+        }
 
         log.Info("Plan start", new Dictionary<string, object?>
         {
@@ -422,6 +459,7 @@ Phase 3:
             ["outDir"] = outDir,
             ["queries"] = queriesPath,
             ["dbConfig"] = dbConfigPath,
+            ["dbConfigSource"] = dbConfigSource,
             ["env"] = envName ?? "(default)"
         });
 
@@ -430,12 +468,6 @@ Phase 3:
         if (!File.Exists(queriesPath))
         {
             log.Error("queries.json not found", new Dictionary<string, object?> { ["queries"] = queriesPath });
-            return 1;
-        }
-
-        if (!File.Exists(dbConfigPath))
-        {
-            log.Error("DB config file not found", new Dictionary<string, object?> { ["dbConfig"] = dbConfigPath });
             return 1;
         }
 
@@ -519,10 +551,10 @@ Phase 3:
         return await Task.FromResult(0);
     }
 
-    static (string queriesPath, string dbConfigPath, string? envName) ParsePlanArgs(string[] args, OutputPaths defaults)
+    static (string queriesPath, string? explicitDbConfigPath, string? envName) ParsePlanArgs(string[] args, OutputPaths defaults)
     {
         var queriesPath = defaults.QueriesPath;
-        var dbConfigPath = defaults.DbConnectionsPath;
+        string? explicitDbConfigPath = null;
         string? envName = null;
 
         for (var i = 0; i < args.Length; i++)
@@ -533,7 +565,7 @@ Phase 3:
                     queriesPath = Path.GetFullPath(args[++i]);
                     break;
                 case "--db-config":
-                    dbConfigPath = Path.GetFullPath(args[++i]);
+                    explicitDbConfigPath = Path.GetFullPath(args[++i]);
                     break;
                 case "--env":
                     envName = args[++i];
@@ -541,7 +573,7 @@ Phase 3:
             }
         }
 
-        return (queriesPath, dbConfigPath, envName);
+        return (queriesPath, explicitDbConfigPath, envName);
     }
 
     static int RunReport(string[] args)

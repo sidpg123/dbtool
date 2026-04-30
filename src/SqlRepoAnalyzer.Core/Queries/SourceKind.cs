@@ -7,5 +7,8 @@ public enum SourceKind
     TypeOrmRawQuery = 3,
     TypeOrmQueryBuilderSite = 4,
     TypeOrmQueryDynamic = 5,
+
+    /// <summary>Verbatim / interpolated verbatim string in a C# source file (e.g. EF Core raw SQL).</summary>
+    CSharpEmbeddedSql = 6,
 }
 

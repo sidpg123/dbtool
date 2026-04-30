@@ -41,6 +41,8 @@ dotnet run -- scan --root "c:\Users\NinadBandiwadekarIND\Repos\DB Optimization T
 
 **Scan notes:** `.sql` text is split on **semicolons** (script `GO` is also honored). Statements not separated by `;` stay in **one** inventory blob. **`--query-scope select`** keeps only fragments that parse as *only* static `SELECT`s; if a blob mixes `SELECT` + `MERGE` / `INSERT` / `DELETE` / etc., or you use `select` scope with almost no qualifying batches, `queries.json` can be **`[]`** even when the file obviously contains `SELECT`. Use default **`--query-scope all`** (or omit the flag) to inventory everything.
 
+**C# backends:** **`scan`** crawls **`*.cs`** and pulls T-SQL from **verbatim** strings (`@"…"`, `$@"…"`, `@$"…"`) whose text looks like SQL (starts with keywords such as `SELECT`, `MERGE`, `CREATE`, …). Put raw SQL in a verbatim literal for best results; normal `"…"` strings are not mined. **`bin`** / **`obj`** folders are skipped.
+
 # 3) suggestions
 dotnet run -- suggest --root "c:\Users\NinadBandiwadekarIND\Repos\DB Optimization Tool\dbtool" --out "c:\Users\NinadBandiwadekarIND\Repos\DB Optimization Tool\dbtool\.sqltool"
 ```
@@ -62,7 +64,9 @@ Optional flags:
 
 ### DB connection config JSON
 
-Create `db-connections.json` under your output folder (for example `.sqltool/db-connections.json`):
+`plan` resolves `db-connections.json` in this order: **`--db-config` path** → **`<outDir>/db-connections.json`** (e.g. per-repo under `.sqltool/`) → **template bundled with the tool** next to `SqlRepoAnalyzer.dll` (no file in the scanned repo required). Edit the bundled copy in your build output, use `--db-config`, or add `.sqltool/db-connections.json` for environment-specific secrets.
+
+Example (either location):
 
 ```json
 {

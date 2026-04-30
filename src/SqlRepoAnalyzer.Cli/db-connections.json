@@ -1,0 +1,14 @@
+{
+  "defaultEnvironment": "dev",
+  "environments": {
+    "dev": {
+      "connectionString": "Server=dev.c5owyuw64shd.ap-south-1.rds.amazonaws.com,1982;Database=JIBE_Main;User Id=j2;Password=123456;TrustServerCertificate=true"
+    },
+    "qa": {
+      "connectionString": "Server=qa-sql-host;Database=YourDb;User Id=app_user;Password=CHANGE_ME;TrustServerCertificate=true"
+    },
+    "prod": {
+      "connectionString": "Server=prod-sql-host;Database=YourDb;User Id=app_user;Password=CHANGE_ME;TrustServerCertificate=true"
+    }
+  }
+}
