@@ -1,3 +1,4 @@
+using SqlRepoAnalyzer.Core.Incremental;
 using SqlRepoAnalyzer.Core.Logging;
 using SqlRepoAnalyzer.Core.Manifest;
 using SqlRepoAnalyzer.Core.Output;
@@ -51,14 +52,14 @@ SqlRepoAnalyzer - SQL inventory & suggestions tool
 Usage:
   SqlRepoAnalyzer doctor --out <dir>
   SqlRepoAnalyzer scan --root <repoRoot> [--out <dir>] [--backend csharp|node|mixed] [--query-scope all|select]
-  SqlRepoAnalyzer suggest --root <repoRoot> [--out <dir>] [--queries <path>] [--rules-version <string>]
+  SqlRepoAnalyzer suggest --root <repoRoot> [--out <dir>] [--queries <path>] [--rules-version <string>] [--incremental]
   SqlRepoAnalyzer plan --root <repoRoot> [--out <dir>] [--queries <path>] [--db-config <path>] [--env <name>]
   SqlRepoAnalyzer report --out <dir>                        (stub; richer summaries planned)
 
 Phase 2:
   - doctor runs environment checks (Node presence/version when JS/TS is crawled; out dir writable)
-  - scan writes manifest + queries.json (inventory from .sql, verbatim SQL in .cs, TypeScript/JavaScript extractors) and markdown/queries.md
-  - suggest reads queries.json and writes suggestions.json + markdown/suggestions.md
+  - scan writes manifest + queries.json + queries.incremental.json + scan-state.json (inventory from .sql, verbatim SQL in .cs, TypeScript/JavaScript extractors) and markdown/queries.md
+  - suggest reads queries.json and writes suggestions.json + markdown/suggestions.md; use --incremental to reuse suggestions for unchanged queries (see queries.incremental.json from scan)
 
 Phase 3:
   - plan runs DB-connected checks (db-connections.json: --db-config, else <out>/db-connections.json, else tool-bundled template) and writes plans.json + markdown/plans.md
@@ -311,6 +312,11 @@ Phase 3:
         JsonlWriter.WriteJsonArray(paths.QueriesPath, records);
         QueriesMarkdownFormatter.WriteUtf8File(paths.QueriesMarkdownPath, records, DateTimeOffset.UtcNow.ToString("o"));
 
+        var previousScanState = ScanIncremental.TryReadScanState(paths.ScanStatePath);
+        var (incrementalQueries, newScanState) = ScanIncremental.ComputeIncremental(records, previousScanState);
+        JsonlWriter.WriteJsonArray(paths.QueriesIncrementalPath, incrementalQueries);
+        ScanIncremental.WriteScanState(paths.ScanStatePath, newScanState);
+
         var counts = new Dictionary<string, object?>
         {
             ["phase"] = 1,
@@ -324,6 +330,8 @@ Phase 3:
             ["candidateCountBeforeQueryScopeFilter"] = preFilterCandidateCount,
             ["candidateCount"] = candidates.Count,
             ["queryRecordCount"] = records.Count,
+            ["incrementalQueryCount"] = incrementalQueries.Count,
+            ["unchangedQueryCount"] = Math.Max(0, records.Count - incrementalQueries.Count),
             ["backend"] = backend,
             ["queryScope"] = queryScope
         };
@@ -344,6 +352,8 @@ Phase 3:
         {
             ["manifest"] = paths.ManifestPath,
             ["queries"] = paths.QueriesPath,
+            ["queriesIncremental"] = paths.QueriesIncrementalPath,
+            ["scanState"] = paths.ScanStatePath,
             ["queriesMarkdown"] = paths.QueriesMarkdownPath
         });
         return await Task.FromResult(0);
@@ -358,14 +368,15 @@ Phase 3:
             logFilePath: paths.LogPath,
             minFileLevel: LogLevel.Debug);
 
-        var (queriesPath, rulesVersion) = ParseSuggestArgs(args, paths);
+        var (queriesPath, rulesVersion, incrementalSuggest) = ParseSuggestArgs(args, paths);
 
         log.Info("Suggest start", new Dictionary<string, object?>
         {
             ["repoRoot"] = repoRoot,
             ["outDir"] = outDir,
             ["queries"] = queriesPath,
-            ["rulesVersion"] = rulesVersion
+            ["rulesVersion"] = rulesVersion,
+            ["incremental"] = incrementalSuggest
         });
 
         Directory.CreateDirectory(outDir);
@@ -376,12 +387,55 @@ Phase 3:
             return 1;
         }
 
-        var queries = SuggestionService.ReadQueriesJson(queriesPath);
-        var suggestions = SuggestionService.BuildSuggestions(queries);
+        var fullQueries = SuggestionService.ReadQueriesJson(queriesPath);
+        IReadOnlyList<SuggestionRecord> suggestions;
+        if (incrementalSuggest)
+        {
+            var incrementalQueriesPath = Path.Combine(
+                Path.GetDirectoryName(Path.GetFullPath(queriesPath))!,
+                "queries.incremental.json");
+            var priorById = SuggestionService.TryReadSuggestionsByQueryId(paths.SuggestionsPath);
+            if (priorById is null)
+            {
+                log.Info("suggest --incremental: no existing suggestions.json; running full static analysis.", null);
+                suggestions = SuggestionService.BuildSuggestions(fullQueries);
+            }
+            else if (!File.Exists(incrementalQueriesPath))
+            {
+                log.Warn(
+                    "suggest --incremental: queries.incremental.json not found next to queries file (run scan). Running full static analysis.",
+                    new Dictionary<string, object?> { ["queriesDir"] = Path.GetDirectoryName(Path.GetFullPath(queriesPath)) });
+                suggestions = SuggestionService.BuildSuggestions(fullQueries);
+            }
+            else
+            {
+                var deltaQueries = SuggestionService.ReadQueriesJson(incrementalQueriesPath);
+                suggestions = SuggestionService.BuildSuggestionsMerged(fullQueries, deltaQueries, priorById);
+                log.Info("suggest --incremental: merged with delta", new Dictionary<string, object?>
+                {
+                    ["fullQueryCount"] = fullQueries.Count,
+                    ["deltaQueryCount"] = deltaQueries.Count
+                });
+            }
+        }
+        else
+        {
+            suggestions = SuggestionService.BuildSuggestions(fullQueries);
+        }
+
         SuggestionService.WriteSuggestionsJson(paths.SuggestionsPath, suggestions);
         SuggestionsMarkdownFormatter.WriteUtf8File(paths.SuggestionsMarkdownPath, suggestions, DateTimeOffset.UtcNow.ToString("o"));
 
         var preservedBackend = ManifestReader.TryReadBackend(paths.ManifestPath);
+
+        var suggestConfig = new Dictionary<string, object?>
+        {
+            ["phase"] = 2,
+            ["rulesVersion"] = rulesVersion,
+            ["queryCount"] = fullQueries.Count,
+            ["suggestionCount"] = suggestions.Count,
+            ["incrementalSuggest"] = incrementalSuggest
+        };
 
         ManifestWriter.WriteManifest(paths.ManifestPath, new ManifestRecord(
             ReportSchemaVersion: 2,
@@ -392,13 +446,7 @@ Phase 3:
             GitSha: null,
             RulesVersion: rulesVersion,
             Backend: preservedBackend,
-            Config: new Dictionary<string, object?>
-            {
-                ["phase"] = 2,
-                ["rulesVersion"] = rulesVersion,
-                ["queryCount"] = queries.Count,
-                ["suggestionCount"] = suggestions.Count
-            }
+            Config: suggestConfig
         ));
 
         log.Info("Suggest complete", new Dictionary<string, object?>
@@ -409,10 +457,11 @@ Phase 3:
         return 0;
     }
 
-    static (string queriesPath, string rulesVersion) ParseSuggestArgs(string[] args, OutputPaths defaults)
+    static (string queriesPath, string rulesVersion, bool incrementalSuggest) ParseSuggestArgs(string[] args, OutputPaths defaults)
     {
         string queriesPath = defaults.QueriesPath;
         var rulesVersion = "0.2.0";
+        var incrementalSuggest = false;
 
         for (var i = 0; i < args.Length; i++)
         {
@@ -424,10 +473,13 @@ Phase 3:
                 case "--rules-version":
                     rulesVersion = args[++i];
                     break;
+                case "--incremental":
+                    incrementalSuggest = true;
+                    break;
             }
         }
 
-        return (queriesPath, rulesVersion);
+        return (queriesPath, rulesVersion, incrementalSuggest);
     }
 
     static async Task<int> RunPlan(string[] args)
@@ -603,7 +655,8 @@ Phase 3:
         Console.WriteLine($"outDir={paths.OutDir}");
         Console.WriteLine($"markdownDir={paths.MarkdownDir}");
         Console.WriteLine($"manifest={paths.ManifestPath}");
-        Console.WriteLine($"queries={paths.QueriesPath}");
+        Console.WriteLine($"queriesIncremental={paths.QueriesIncrementalPath}");
+        Console.WriteLine($"scanState={paths.ScanStatePath}");
         Console.WriteLine($"queriesMd={paths.QueriesMarkdownPath}");
         Console.WriteLine($"suggestions={paths.SuggestionsPath}");
         Console.WriteLine($"suggestionsMd={paths.SuggestionsMarkdownPath}");
