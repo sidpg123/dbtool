@@ -141,7 +141,7 @@ Phase 3:
                 error = "Missing value for --query-scope (all or select).";
                 return false;
             }
-
+    
             var v = args[++i].Trim().ToLowerInvariant();
             switch (v)
             {

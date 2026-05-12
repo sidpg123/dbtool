@@ -79,7 +79,8 @@ These rules directly affect whether SQL can use indexes effectively (sargability
 - **Purpose**: Prefer two-part naming for table/view references (`[schema].[object]`).
 - **Type**: AST.
 - **Schema required**: No.
-- **Limitations**: Skips temp tables (`#...`). Does not validate quoting/brackets.
+- **Output**: One finding per distinct unqualified object name. `evidence` has `occurrenceCount` and `occurrences` (`{ line, column }` per hit, 1-based in the analyzed SQL text).
+- **Limitations**: Skips temp tables (`#...`). Skips single-part names that match a CTE declared on the same statement (`WITH` … `SELECT` / `INSERT` / `UPDATE` / `DELETE` / `MERGE`), since CTEs are not schema-qualified. Does not validate quoting/brackets. If an unqualified name matches a CTE but refers to a base object with the same name, the reference is skipped (rare).
 
 ### `sql.std.join_requires_alias`
 - **Purpose**: In multi-table queries, require aliases on base tables.
@@ -91,6 +92,7 @@ These rules directly affect whether SQL can use indexes effectively (sargability
 - **Purpose**: Enforce snake_case naming for identifiers (tables/columns/aliases).
 - **Type**: AST (heuristic on identifier tokens).
 - **Schema required**: No.
+- **Output**: One finding per distinct failing identifier (per category: schema object segment, table alias, column). `evidence` includes `occurrenceCount` and `occurrences` (each `{ line, column }`, 1-based positions within the analyzed SQL text from ScriptDom).
 - **Limitations**:
   - Skips `#temp` and `@variables`.
   - Does not validate/require brackets (`[]`).
@@ -123,6 +125,7 @@ These rules directly affect whether SQL can use indexes effectively (sargability
 - **Purpose**: Prefer bracket-quoted identifiers (`[schema].[object]`, etc.) per standard.
 - **Type**: AST (identifier quote metadata).
 - **Schema required**: No.
+- **Output**: One finding per distinct failing identifier string (first offending segment per `NamedTableReference`). `evidence` includes `occurrenceCount` and `occurrences` with line/column positions.
 
 ### `sql.std.select_column_separate_line`
 - **Purpose**: Ensure select-list expressions are on separate lines.

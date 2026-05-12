@@ -534,7 +534,7 @@ public static class Phase3DbRuleService
     }
 
     private static IEnumerable<Phase3RuleFinding> CheckHeavyTriggers(
-        List<(string TriggerName, string? Definition)> triggers,
+        List<(string TriggerName, string ParentTableQualified, string? Definition)> triggers,
         Dictionary<string, HashSet<string>> refsByTable,
         IReadOnlyList<string> allQueryIds)
     {
@@ -555,12 +555,14 @@ public static class Phase3DbRuleService
                 RuleId = "db.heavy_trigger_impact",
                 Status = "warn",
                 Severity = "warn",
-                Message = $"Trigger `{t.TriggerName}` appears heavy and may impact DML performance.",
+                Message =
+                    $"Trigger `{t.TriggerName}` on table `{t.ParentTableQualified}` appears heavy and may impact DML performance.",
                 Recommendation = "Simplify trigger logic and avoid row-by-row/procedural operations where possible.",
-                AffectedObjects = new[] { t.TriggerName },
+                AffectedObjects = new[] { t.ParentTableQualified, t.TriggerName },
                 QueryIds = allQueryIds,
                 Evidence = new Dictionary<string, object?>
                 {
+                    ["parentTable"] = t.ParentTableQualified,
                     ["definitionLength"] = body.Length,
                     ["containsCursor"] = body.Contains("cursor", StringComparison.OrdinalIgnoreCase),
                     ["containsWhile"] = body.Contains("while", StringComparison.OrdinalIgnoreCase),
@@ -1637,19 +1639,21 @@ WHERE mid.database_id = DB_ID()
         return list;
     }
 
-    private static async Task<List<(string TriggerName, string? Definition)>> LoadTriggerDefinitionsAsync(
+    private static async Task<List<(string TriggerName, string ParentTableQualified, string? Definition)>> LoadTriggerDefinitionsAsync(
         SqlConnection conn,
         IReadOnlyCollection<int> objectIds,
         CancellationToken ct)
     {
-        var list = new List<(string TriggerName, string? Definition)>();
+        var list = new List<(string TriggerName, string ParentTableQualified, string? Definition)>();
         if (objectIds.Count == 0)
             return list;
 
         var idSql = string.Join(", ", objectIds.Select((_, i) => $"@id{i}"));
         var sql = $"""
 SELECT
-    OBJECT_SCHEMA_NAME(tr.object_id) AS schema_name,
+    OBJECT_SCHEMA_NAME(tr.parent_id) AS parent_schema_name,
+    OBJECT_NAME(tr.parent_id) AS parent_table_name,
+    OBJECT_SCHEMA_NAME(tr.object_id) AS trigger_schema_name,
     tr.name AS trigger_name,
     m.definition
 FROM sys.triggers tr
@@ -1662,10 +1666,13 @@ WHERE tr.parent_class_desc = 'OBJECT_OR_COLUMN'
         await using var rdr = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
         while (await rdr.ReadAsync(ct).ConfigureAwait(false))
         {
-            var schema = rdr.IsDBNull(0) ? "dbo" : rdr.GetString(0);
-            var name = rdr.IsDBNull(1) ? "?" : rdr.GetString(1);
-            var def = rdr.IsDBNull(2) ? null : rdr.GetString(2);
-            list.Add(($"{schema}.{name}", def));
+            var parentSchema = rdr.IsDBNull(0) ? "dbo" : rdr.GetString(0);
+            var parentName = rdr.IsDBNull(1) ? "?" : rdr.GetString(1);
+            var parentQualified = $"{parentSchema}.{parentName}";
+            var trigSchema = rdr.IsDBNull(2) ? "dbo" : rdr.GetString(2);
+            var trigName = rdr.IsDBNull(3) ? "?" : rdr.GetString(3);
+            var def = rdr.IsDBNull(4) ? null : rdr.GetString(4);
+            list.Add(($"{trigSchema}.{trigName}", parentQualified, def));
         }
         return list;
     }

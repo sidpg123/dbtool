@@ -18,12 +18,58 @@ public sealed class SqlStdSnakeCaseIdentifierRule : IRule
 
         var visitor = new Visitor();
         ctx.Ast.Accept(visitor);
-        return visitor.Findings;
+        return visitor.ToFindings();
     }
 
     private sealed class Visitor : TSqlFragmentVisitor
     {
-        public List<Finding> Findings { get; } = new();
+        private readonly Dictionary<string, List<(int Line, int Column)>> _schemaObjectIdentifiers = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, List<(int Line, int Column)>> _aliases = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, List<(int Line, int Column)>> _columns = new(StringComparer.OrdinalIgnoreCase);
+
+        public IReadOnlyList<Finding> ToFindings()
+        {
+            var list = new List<Finding>(
+                _schemaObjectIdentifiers.Count + _aliases.Count + _columns.Count);
+
+            foreach (var kv in _schemaObjectIdentifiers.OrderBy(x => x.Key, StringComparer.OrdinalIgnoreCase))
+            {
+                var (name, positions) = (kv.Key, kv.Value);
+                list.Add(new Finding(
+                    "sql.std.snake_case",
+                    Severity.Info,
+                    Confidence.Low,
+                    $"Identifier `{name}` should be snake_case (lowercase letters, digits, underscore; start with a letter).",
+                    Suggestion: "Rename to snake_case per team naming standard.",
+                    FindingEvidence.FromPositions(positions)));
+            }
+
+            foreach (var kv in _aliases.OrderBy(x => x.Key, StringComparer.OrdinalIgnoreCase))
+            {
+                var (alias, positions) = (kv.Key, kv.Value);
+                list.Add(new Finding(
+                    "sql.std.snake_case",
+                    Severity.Info,
+                    Confidence.Low,
+                    $"Table alias `{alias}` should be snake_case.",
+                    Suggestion: "Use a short lowercase snake_case alias.",
+                    FindingEvidence.FromPositions(positions)));
+            }
+
+            foreach (var kv in _columns.OrderBy(x => x.Key, StringComparer.OrdinalIgnoreCase))
+            {
+                var (col, positions) = (kv.Key, kv.Value);
+                list.Add(new Finding(
+                    "sql.std.snake_case",
+                    Severity.Info,
+                    Confidence.Low,
+                    $"Column identifier `{col}` should be snake_case.",
+                    Suggestion: "Use lowercase snake_case column names.",
+                    FindingEvidence.FromPositions(positions)));
+            }
+
+            return list;
+        }
 
         public override void ExplicitVisit(NamedTableReference node)
         {
@@ -35,26 +81,12 @@ public sealed class SqlStdSnakeCaseIdentifierRule : IRule
                 if (v.Equals("dbo", StringComparison.OrdinalIgnoreCase))
                     continue;
 
-                if (!ValidSnake.IsMatch(v))
-                {
-                    Findings.Add(new Finding(
-                        "sql.std.snake_case",
-                        Severity.Info,
-                        Confidence.Low,
-                        $"Identifier `{v}` should be snake_case (lowercase letters, digits, underscore; start with a letter).",
-                        Suggestion: "Rename to snake_case per team naming standard."));
-                }
+                if (id is not null && !ValidSnake.IsMatch(v))
+                    Bump(_schemaObjectIdentifiers, v, FindingEvidence.Position(id));
             }
 
-            if (node.Alias?.Value is { } alias && !ValidSnake.IsMatch(alias))
-            {
-                Findings.Add(new Finding(
-                    "sql.std.snake_case",
-                    Severity.Info,
-                    Confidence.Low,
-                    $"Table alias `{alias}` should be snake_case.",
-                    Suggestion: "Use a short lowercase snake_case alias."));
-            }
+            if (node.Alias is { } aliasId && !string.IsNullOrEmpty(aliasId.Value) && !ValidSnake.IsMatch(aliasId.Value))
+                Bump(_aliases, aliasId.Value, FindingEvidence.Position(aliasId));
 
             base.ExplicitVisit(node);
         }
@@ -63,19 +95,24 @@ public sealed class SqlStdSnakeCaseIdentifierRule : IRule
         {
             if (node.MultiPartIdentifier?.Identifiers is { Count: > 0 } ids)
             {
-                var col = ids[^1].Value;
+                var colId = ids[^1];
+                var col = colId.Value;
                 if (!string.IsNullOrEmpty(col) && !col.StartsWith("@", StringComparison.Ordinal) && !ValidSnake.IsMatch(col))
-                {
-                    Findings.Add(new Finding(
-                        "sql.std.snake_case",
-                        Severity.Info,
-                        Confidence.Low,
-                        $"Column identifier `{col}` should be snake_case.",
-                        Suggestion: "Use lowercase snake_case column names."));
-                }
+                    Bump(_columns, col, FindingEvidence.Position(colId));
             }
 
             base.ExplicitVisit(node);
+        }
+
+        private static void Bump(Dictionary<string, List<(int Line, int Column)>> counts, string key, (int Line, int Column) pos)
+        {
+            if (!counts.TryGetValue(key, out var list))
+            {
+                list = new List<(int Line, int Column)>();
+                counts[key] = list;
+            }
+
+            list.Add(pos);
         }
     }
 }

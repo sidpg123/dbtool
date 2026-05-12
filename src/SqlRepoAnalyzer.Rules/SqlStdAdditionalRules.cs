@@ -16,12 +16,30 @@ public sealed class SqlStdBracketQuotedIdentifiersRule : IRule
         if (ctx.Ast is null || !ctx.Parse!.Success) return Array.Empty<Finding>();
         var v = new Visitor();
         ctx.Ast.Accept(v);
-        return v.Findings;
+        return v.ToFindings();
     }
 
     private sealed class Visitor : TSqlFragmentVisitor
     {
-        public List<Finding> Findings { get; } = new();
+        private readonly Dictionary<string, List<(int Line, int Column)>> _hits = new(StringComparer.OrdinalIgnoreCase);
+
+        public IReadOnlyList<Finding> ToFindings()
+        {
+            var list = new List<Finding>(_hits.Count);
+            foreach (var kv in _hits.OrderBy(x => x.Key, StringComparer.OrdinalIgnoreCase))
+            {
+                var (value, positions) = (kv.Key, kv.Value);
+                list.Add(new Finding(
+                    "sql.std.bracket_quoted_identifiers",
+                    Severity.Info,
+                    Confidence.Low,
+                    $"Identifier `{value}` should be bracket-quoted (`[{value}]`) per coding standard.",
+                    Suggestion: null,
+                    FindingEvidence.FromPositions(positions)));
+            }
+
+            return list;
+        }
 
         public override void ExplicitVisit(NamedTableReference node)
         {
@@ -31,11 +49,14 @@ public sealed class SqlStdBracketQuotedIdentifiersRule : IRule
                 if (id.Value.StartsWith("#", StringComparison.Ordinal)) continue;
                 if (id.QuoteType != QuoteType.SquareBracket)
                 {
-                    Findings.Add(new Finding(
-                        "sql.std.bracket_quoted_identifiers",
-                        Severity.Info,
-                        Confidence.Low,
-                        $"Identifier `{id.Value}` should be bracket-quoted (`[{id.Value}]`) per coding standard."));
+                    var pos = FindingEvidence.Position(id);
+                    if (!_hits.TryGetValue(id.Value, out var list))
+                    {
+                        list = new List<(int Line, int Column)>();
+                        _hits[id.Value] = list;
+                    }
+
+                    list.Add(pos);
                     break;
                 }
             }

@@ -57,7 +57,10 @@ JSON array (Phase 2 static analysis). `queryId` matches `queries.json`. A readab
   - `confidence` (string enum name: `Low`, `Medium`, `High`)
   - `message` (string)
   - `suggestion` (string \| null)
-  - `evidence` (object \| null)
+  - `evidence` (object \| null) — optional fields:
+    - `occurrenceCount` (number) — how many times this issue appears in the analyzed `sqlText`
+    - `occurrences` (array) — 1-based **line** and **column** in the **analyzed `sqlText` string** for that query (ScriptDom start position of the identifier / reported token), not necessarily the on-disk file when SQL is embedded or split by `scan`
+    - other rule-specific keys as needed
 
 ## `plans.json` (Phase 3)
 

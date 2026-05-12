@@ -1,3 +1,4 @@
+using System.Collections;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -116,41 +117,54 @@ public static class SuggestionsMarkdownFormatter
 
             sb.AppendLine("#### Rule findings");
             sb.AppendLine();
-            sb.AppendLine("| Severity | Rule ID | Confidence | Message |");
-            sb.AppendLine("|:--------:|---------|:----------:|---------|");
+            sb.AppendLine("| Severity | Rule ID | Confidence | Count | Message |");
+            sb.AppendLine("|:--------:|---------|:----------:|------:|---------|");
             foreach (var f in s.Findings.OrderByDescending(x => x.Severity).ThenBy(x => x.RuleId, StringComparer.OrdinalIgnoreCase))
             {
                 sb.Append("| ").Append(MdEscape(f.Severity.ToString())).Append(" | `").Append(MdEscape(f.RuleId)).Append("` | ");
-                sb.Append(MdEscape(f.Confidence.ToString())).Append(" | ").Append(MdCellOneLine(f.Message)).AppendLine(" |");
+                sb.Append(MdEscape(f.Confidence.ToString())).Append(" | ").Append(GetOccurrenceCount(f).ToString()).Append(" | ");
+                sb.Append(MdCellOneLine(f.Message)).AppendLine(" |");
             }
             sb.AppendLine();
 
             var withDetail = s.Findings.Where(f => !string.IsNullOrWhiteSpace(f.Suggestion) || f.Evidence is { Count: > 0 }).ToList();
             if (withDetail.Count > 0)
             {
-                sb.AppendLine("#### Finding detail (suggestions & evidence)");
+                sb.AppendLine("#### Finding detail (suggestions, locations & evidence)");
                 sb.AppendLine();
                 foreach (var f in withDetail.OrderByDescending(x => x.Severity).ThenBy(x => x.RuleId, StringComparer.OrdinalIgnoreCase))
                 {
-                    sb.AppendLine($"##### `{MdEscape(f.RuleId)}` ({MdEscape(f.Severity.ToString())})");
+                    var n = GetOccurrenceCount(f);
+                    var countSuffix = n > 1 ? $" — ×{n}" : "";
+                    sb.AppendLine($"##### `{MdEscape(f.RuleId)}` ({MdEscape(f.Severity.ToString())}){countSuffix}");
                     sb.AppendLine();
                     if (!string.IsNullOrWhiteSpace(f.Suggestion))
                         sb.AppendLine($"- **Suggestion:** {MdParagraph(f.Suggestion)}");
-                    if (f.Evidence is { Count: > 0 })
+
+                    var locLine = FormatOccurrenceLocationsLine(f.Evidence);
+                    if (!string.IsNullOrEmpty(locLine))
+                        sb.AppendLine($"- **Locations:** {locLine}");
+
+                    if (f.Evidence is { Count: > 0 } ev && HasEvidenceBeyondOccurrences(ev))
                     {
-                        sb.AppendLine("- **Evidence:**");
-                        sb.AppendLine();
-                        sb.AppendLine("```json");
-                        try
+                        var dump = FilterEvidenceForJsonDump(ev);
+                        if (dump.Count > 0)
                         {
-                            sb.AppendLine(JsonSerializer.Serialize(f.Evidence, EvidenceJsonOptions));
+                            sb.AppendLine("- **Evidence:**");
+                            sb.AppendLine();
+                            sb.AppendLine("```json");
+                            try
+                            {
+                                sb.AppendLine(JsonSerializer.Serialize(dump, EvidenceJsonOptions));
+                            }
+                            catch
+                            {
+                                sb.AppendLine("{ \"_note\": \"evidence serialization failed\" }");
+                            }
+                            sb.AppendLine("```");
                         }
-                        catch
-                        {
-                            sb.AppendLine("{ \"_note\": \"evidence serialization failed\" }");
-                        }
-                        sb.AppendLine("```");
                     }
+
                     sb.AppendLine();
                 }
             }
@@ -158,6 +172,114 @@ public static class SuggestionsMarkdownFormatter
             sb.AppendLine("---");
             sb.AppendLine();
         }
+    }
+
+    private static int GetOccurrenceCount(Finding f)
+    {
+        if (f.Evidence?.TryGetValue("occurrenceCount", out var v) != true || v is null)
+            return 1;
+
+        return v switch
+        {
+            int i => i,
+            long l => (int)l,
+            JsonElement je when je.ValueKind == JsonValueKind.Number => je.TryGetInt32(out var n) ? n : 1,
+            _ => 1
+        };
+    }
+
+    private static string FormatOccurrenceLocationsLine(IReadOnlyDictionary<string, object?>? evidence)
+    {
+        if (evidence?.TryGetValue("occurrences", out var occ) != true || occ is null)
+            return "";
+
+        var parts = new List<string>();
+        foreach (var item in FlattenOccurrenceList(occ))
+        {
+            if (TryGetLineColumn(item, out var line, out var col))
+                parts.Add($"L{line}:C{col}");
+        }
+
+        return parts.Count == 0 ? "" : string.Join(", ", parts);
+    }
+
+    private static IEnumerable<object?> FlattenOccurrenceList(object occ)
+    {
+        switch (occ)
+        {
+            case IEnumerable<object?> eo:
+                foreach (var x in eo)
+                    yield return x;
+                yield break;
+            case IEnumerable en:
+                foreach (var x in en)
+                    yield return x;
+                yield break;
+            default:
+                yield break;
+        }
+    }
+
+    private static bool TryGetLineColumn(object? item, out int line, out int col)
+    {
+        line = 0;
+        col = 0;
+        switch (item)
+        {
+            case IReadOnlyDictionary<string, object?> d:
+                return TryReadLineColumn(d, out line, out col);
+            default:
+                return false;
+        }
+    }
+
+    private static bool TryReadLineColumn(IReadOnlyDictionary<string, object?> d, out int line, out int col)
+    {
+        line = 0;
+        col = 0;
+        if (!d.TryGetValue("line", out var ln) || !d.TryGetValue("column", out var cn))
+            return false;
+
+        line = CoerceToPositiveInt(ln);
+        col = CoerceToPositiveInt(cn);
+        return line > 0;
+    }
+
+    private static int CoerceToPositiveInt(object? v)
+    {
+        switch (v)
+        {
+            case int i:
+                return i;
+            case long l:
+                return (int)l;
+            case JsonElement je when je.ValueKind == JsonValueKind.Number && je.TryGetInt32(out var n):
+                return n;
+            default:
+                return 0;
+        }
+    }
+
+    private static bool HasEvidenceBeyondOccurrences(IReadOnlyDictionary<string, object?> ev)
+    {
+        foreach (var key in ev.Keys)
+        {
+            if (!string.Equals(key, "occurrenceCount", StringComparison.Ordinal)
+                && !string.Equals(key, "occurrences", StringComparison.Ordinal))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static IReadOnlyDictionary<string, object?> FilterEvidenceForJsonDump(IReadOnlyDictionary<string, object?> ev)
+    {
+        var filtered = ev.Where(kv =>
+                !string.Equals(kv.Key, "occurrenceCount", StringComparison.Ordinal)
+                && !string.Equals(kv.Key, "occurrences", StringComparison.Ordinal))
+            .ToDictionary(x => x.Key, x => x.Value);
+
+        return filtered;
     }
 
     private static string MdCell(string? text)

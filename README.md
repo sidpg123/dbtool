@@ -41,7 +41,7 @@ dotnet run -- scan --root "c:\Users\NinadBandiwadekarIND\Repos\DB Optimization T
 
 **Scan notes:** `.sql` text is split on **semicolons** (script `GO` is also honored). Statements not separated by `;` stay in **one** inventory blob. **`--query-scope select`** keeps only fragments that parse as *only* static `SELECT`s; if a blob mixes `SELECT` + `MERGE` / `INSERT` / `DELETE` / etc., or you use `select` scope with almost no qualifying batches, `queries.json` can be **`[]`** even when the file obviously contains `SELECT`. Use default **`--query-scope all`** (or omit the flag) to inventory everything.
 
-**C# backends:** **`scan`** crawls **`*.cs`** and pulls T-SQL from **verbatim** strings (`@"…"`, `$@"…"`, `@$"…"`) whose text looks like SQL (starts with keywords such as `SELECT`, `MERGE`, `CREATE`, …). Put raw SQL in a verbatim literal for best results; normal `"…"` strings are not mined. **`bin`** / **`obj`** folders are skipped.
+**C# backends:** **`scan`** crawls **`*.cs`** and pulls T-SQL from **verbatim** strings (`@"…"`, `$@"…"`, `@$"…"`) whose text looks like SQL (starts with keywords such as `SELECT`, `MERGE`, `CREATE`, …). Put raw SQL in a verbatim literal for best results; normal `"…"` strings are not mined. `**bin`** / *`*obj`** folders are skipped.
 
 # 3) suggestions
 dotnet run -- suggest --root "c:\Users\NinadBandiwadekarIND\Repos\DB Optimization Tool\dbtool" --out "c:\Users\NinadBandiwadekarIND\Repos\DB Optimization Tool\dbtool\.sqltool"
@@ -64,7 +64,7 @@ Optional flags:
 
 ### DB connection config JSON
 
-`plan` resolves `db-connections.json` in this order: **`--db-config` path** → **`<outDir>/db-connections.json`** (e.g. per-repo under `.sqltool/`) → **template bundled with the tool** next to `SqlRepoAnalyzer.dll` (no file in the scanned repo required). Edit the bundled copy in your build output, use `--db-config`, or add `.sqltool/db-connections.json` for environment-specific secrets.
+`plan` resolves `db-connections.json` in this order: `**--db-config` path** → `**<outDir>/db-connections.json`** (e.g. per-repo under `.sqltool/`) → **template bundled with the tool** next to `SqlRepoAnalyzer.dll` (no file in the scanned repo required). Edit the bundled copy in your build output, use `--db-config`, or add `.sqltool/db-connections.json` for environment-specific secrets.
 
 Example (either location):
 
@@ -99,8 +99,26 @@ Checked-in sample template: `.sqltool/db-connections.example.json` (copy to `.sq
 - `.sqltool/queries.json`, `.sqltool/suggestions.json`, `.sqltool/plans.json` (after `plan`)
 - `.sqltool/markdown/*.md` — human-readable copies: `queries.md`, `suggestions.md`, `plans.md`
 
+## Recent fixes (this branch)
+
+Phase 2 `**suggest**` rule behavior:
+
+1. `**sql.std.snake_case**` — The rule used to emit one finding per AST occurrence of the same column or identifier, so repeated names in one query produced duplicate rows. It now emits **one finding per distinct** failing schema-object segment, table alias, or column name. `**evidence`** includes `**occurrenceCount**` and `**occurrences**` (`{ line, column }`, 1-based positions in the analyzed SQL text). See `docs/rules.md` for details.
+2. `**sql.std.schema_qualified_object**` — Single-part `FROM` / join targets that are **CTEs** (names declared in the same statement’s `WITH` clause) were incorrectly flagged as needing `[schema].[object]`. The rule now tracks **CTE scope** for `SELECT`, `INSERT`, `UPDATE`, `DELETE`, and `MERGE` and **skips** those references. Unqualified **tables/views** are aggregated **one finding per name** with `**occurrences`** locations. Edge case: an unqualified base table that shares a name with an in-scope CTE is also skipped (documented in `docs/rules.md`).
+3. `**sql.std.bracket_quoted_identifiers**` — Same aggregation + `**occurrences**` as schema/snake_case for repeated identifiers.
+4. `**markdown/suggestions.md**` — Rule summary table includes a **Count** column; detail sections list **Locations** (`L_line:C_col`) and repeat headings only once per finding with **×n** when count > 1.
+
+Re-run `**suggest`** after pulling to refresh `suggestions.json` / `markdown/suggestions.md`.
+
 ## Notes
 
 - `--verbose` = more detailed logs in terminal.
 - `--query-scope all|select` (scan only): default `all` inventories all extracted SQL. `select` keeps only fragments whose parse tree is purely static SELECT statements—mixed DDL/DML/multiple verbs in one **unsplit** fragment are dropped; omit the flag when you see an empty inventory but know SQL exists (see Quick start note).
 - VS Code/Cursor tasks are available in `.vscode/tasks.json` (`doctor`, `scan`, `suggest`, `custom args`).
+
+## Rules which are yet to create
+
+- 3.7
+- 3.8
+- 3.9
+

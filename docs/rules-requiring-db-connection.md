@@ -21,7 +21,7 @@ Implemented by **`plan`** (`Phase3PlansReport` in **`plans.json`**) using **`db-
   `SELECT *` combined with **`sys.dm_db_partition_stats`** row counts for referenced tables.
 
 - **`db.heavy_trigger_impact`**  
-  Trigger bodies from **`sys.triggers`** / **`sys.sql_modules`** scoped to referenced tables (`parent_id`).
+  Trigger bodies from **`sys.triggers`** / **`sys.sql_modules`** scoped to referenced tables (`parent_id`). Findings include the **parent table** (`OBJECT_SCHEMA_NAME`/`OBJECT_NAME` on `parent_id`) in **`message`**, **`affectedObjects`**, and **`evidence.parentTable`**.
 
 ### Implicit conversion / type mismatch
 
