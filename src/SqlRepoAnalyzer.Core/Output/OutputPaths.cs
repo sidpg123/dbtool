@@ -4,6 +4,13 @@ public sealed record OutputPaths(string OutDir)
 {
     public string ManifestPath => Path.Combine(OutDir, "manifest.json");
     public string QueriesPath => Path.Combine(OutDir, "queries.json");
+
+    /// <summary>New or changed query inventory rows vs the previous <c>scan</c> baseline (<c>scan-state.json</c>).</summary>
+    public string QueriesIncrementalPath => Path.Combine(OutDir, "queries.incremental.json");
+
+    /// <summary>Baseline fingerprints from the last <c>scan</c> (queryId → fingerprint).</summary>
+    public string ScanStatePath => Path.Combine(OutDir, "scan-state.json");
+
     public string SuggestionsPath => Path.Combine(OutDir, "suggestions.json");
 
     /// <summary>Readable Phase 2 report parallel to <see cref="SuggestionsPath"/>.</summary>

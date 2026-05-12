@@ -39,9 +39,23 @@ JSON array of query inventory records. A readable copy is also emitted as **`mar
   - `filePath` (string, repo-relative when possible)
   - `startLine`, `startCol`, `endLine`, `endCol` (numbers)
 
+## `queries.incremental.json`
+
+Written by **`scan`**. Same array shape as **`queries.json`**, but only rows whose `queryId` is new or whose `fingerprint` changed compared to **`scan-state.json`** from the previous run. On the first scan (or missing/corrupt baseline), this file lists **all** queries (same as `queries.json`). Used by **`suggest --incremental`** to limit static rule work; `suggest` still reads the full **`queries.json`** for ordering and merge.
+
+## `scan-state.json`
+
+Written by **`scan`** after each successful inventory. Baseline for the next incremental diff.
+
+- `version` (number) — schema version (currently `1`)
+- `lastScanAtUtc` (string, ISO-8601)
+- `fingerprintsByQueryId` (object) — map of `queryId` → `fingerprint` from that scan
+
 ## `suggestions.json`
 
 JSON array (Phase 2 static analysis). `queryId` matches `queries.json`. A readable copy is also emitted as **`markdown/suggestions.md`** after **`suggest`**.
+
+With **`suggest --incremental`**, the CLI merges new findings for queries in **`queries.incremental.json`** (sibling of the `queries.json` passed to `--queries`, default `<out>/queries.incremental.json`) with prior rows from the existing **`suggestions.json`** when the `fingerprint` for that `queryId` is unchanged. Run **`suggest` without `--incremental`** after changing rules or the analyzer so every query is re-evaluated.
 
 - `queryId` (string)
 - `fingerprint` (string)

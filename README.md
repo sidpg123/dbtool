@@ -45,6 +45,9 @@ dotnet run -- scan --root "c:\Users\NinadBandiwadekarIND\Repos\DB Optimization T
 
 # 3) suggestions
 dotnet run -- suggest --root "c:\Users\NinadBandiwadekarIND\Repos\DB Optimization Tool\dbtool" --out "c:\Users\NinadBandiwadekarIND\Repos\DB Optimization Tool\dbtool\.sqltool"
+
+# 3b) suggestions (incremental — reuse Phase 2 rows for queries whose fingerprint did not change since last scan)
+dotnet run -- suggest --root "c:\Users\NinadBandiwadekarIND\Repos\DB Optimization Tool\dbtool" --out "c:\Users\NinadBandiwadekarIND\Repos\DB Optimization Tool\dbtool\.sqltool" --incremental
 ```
 
 ## Phase 3 (`plan`)
@@ -88,16 +91,18 @@ Checked-in sample template: `.sqltool/db-connections.example.json` (copy to `.sq
 ## What each command does
 
 - `doctor`: checks output folder + Node installation
-- `scan`: creates `.sqltool/queries.json` and `.sqltool/markdown/queries.md`
-- `suggest`: creates `.sqltool/suggestions.json` and `.sqltool/markdown/suggestions.md`
+- `scan`: creates `.sqltool/queries.json`, `.sqltool/queries.incremental.json` (new/changed vs last scan), `.sqltool/scan-state.json` (baseline fingerprints), and `.sqltool/markdown/queries.md`
+- `suggest`: creates `.sqltool/suggestions.json` and `.sqltool/markdown/suggestions.md`. With `--incremental`, re-runs static rules only for queries listed in `queries.incremental.json` (next to `queries.json`) and merges into the existing `suggestions.json`; omit the flag after rule/tool upgrades to refresh everything.
 - `plan`: creates `.sqltool/plans.json` and `.sqltool/markdown/plans.md` (DB-connected rule checks)
 - `report`: placeholder/stub
 
 ## Output files
 
 - `.sqltool/manifest.json`
-- `.sqltool/queries.json`, `.sqltool/suggestions.json`, `.sqltool/plans.json` (after `plan`)
+- `.sqltool/queries.json`, `.sqltool/queries.incremental.json`, `.sqltool/scan-state.json`, `.sqltool/suggestions.json`, `.sqltool/plans.json` (after `plan`)
 - `.sqltool/markdown/*.md` — human-readable copies: `queries.md`, `suggestions.md`, `plans.md`
+
+**Incremental scan:** each `scan` overwrites `queries.json` with the full inventory. It compares to `scan-state.json` from the previous run, writes only new/changed rows to `queries.incremental.json`, then updates `scan-state.json`. First run (or missing state) treats every query as incremental. **`plan`** still uses full `queries.json` only.
 
 ## Recent fixes (this branch)
 
