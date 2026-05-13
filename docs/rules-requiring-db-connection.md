@@ -9,7 +9,7 @@ Implemented by **`plan`** (`Phase3PlansReport` in **`plans.json`**) using **`db-
 ### Core schema and index fit
 
 - **`schema.unknown_table`**  
-  Static references are resolved against `sys.tables` for the chosen environment; unmatched references produce fail findings.
+  Static references are resolved against **`sys.tables`**, **`sys.views`**, and **`sys.synonyms`** for the chosen environment (synonyms are followed to their **`base_object_id`**, including chained synonyms, and must resolve to a user table or view); unmatched references produce fail findings.
 
 - **`db.covering_index`**  
   Live index metadata counts usable indexes vs heap heuristic for referenced tables.
@@ -18,7 +18,7 @@ Implemented by **`plan`** (`Phase3PlansReport` in **`plans.json`**) using **`db-
   Predicate/select-list columns matched against index key/includes; missing-index DMV snippets when available.
 
 - **`db.minimal_dataset_extraction`**  
-  `SELECT *` combined with **`sys.dm_db_partition_stats`** row counts for referenced tables.
+  `SELECT *` combined with **`sys.dm_db_partition_stats`** row counts for referenced user tables and views (including via synonym).
 
 - **`db.heavy_trigger_impact`**  
   Trigger bodies from **`sys.triggers`** / **`sys.sql_modules`** scoped to referenced tables (`parent_id`). Findings include the **parent table** (`OBJECT_SCHEMA_NAME`/`OBJECT_NAME` on `parent_id`) in **`message`**, **`affectedObjects`**, and **`evidence.parentTable`**.
@@ -31,7 +31,7 @@ Implemented by **`plan`** (`Phase3PlansReport` in **`plans.json`**) using **`db-
 ### Statistics freshness
 
 - **`db.stats_freshness`**  
-  Uses **`sys.stats`** plus **`sys.dm_db_stats_properties`** for referenced tables (`last_updated`, **`modification_counter`**, **`rows`**). Warns when stats look stale versus simple heuristics (e.g. old `last_updated` with non-trivial **`rows`**, or high **`modification_counter`** relative to **`rows`**). Permission-sensitive; fails soft if DMV access is denied.
+  Uses **`sys.stats`** plus **`sys.dm_db_stats_properties`** for referenced user tables and views (`last_updated`, **`modification_counter`**, **`rows`**). Warns when stats look stale versus simple heuristics (e.g. old `last_updated` with non-trivial **`rows`**, or high **`modification_counter`** relative to **`rows`**). Permission-sensitive; fails soft if DMV access is denied.
 
 ### Redundant / unused indexes
 

@@ -8,7 +8,6 @@ using SqlRepoAnalyzer.Core.Reports;
 using SqlRepoAnalyzer.Core.SqlFiles;
 using SqlRepoAnalyzer.Core.Phase3;
 using SqlRepoAnalyzer.Core.Tsql;
-using Microsoft.SqlServer.TransactSql.ScriptDom;
 using SqlRepoAnalyzer.TypeScript.Node;
 using SqlRepoAnalyzer.TypeScript.Extractor;
 using SqlRepoAnalyzer.Suggestions;
@@ -272,6 +271,7 @@ Phase 3:
             try
             {
                 candidates.AddRange(CSharpEmbeddedSqlExtractor.ExtractFromFile(cf));
+                candidates.AddRange(CSharpSqlHelperExecuteDatasetExtractor.ExtractFromFile(cf));
             }
             catch (Exception ex)
             {
@@ -292,7 +292,7 @@ Phase 3:
             candidates = candidates
                 .Where(c => !string.IsNullOrWhiteSpace(c.SqlText))
                 .Where(c => c.SourceKind != SourceKind.TypeOrmQueryDynamic)
-                .Where(c => IsSelectOnlyCandidate(c.SqlText!))
+                .Where(c => SelectScopeSqlClassifier.IsSelectOnlyInventoryCandidate(c.SqlText!))
                 .ToList();
         }
 
@@ -663,33 +663,5 @@ Phase 3:
         Console.WriteLine($"plans={paths.PlansPath}");
         Console.WriteLine($"plansMd={paths.PlansMarkdownPath}");
         return 0;
-    }
-
-    static bool IsSelectOnlyCandidate(string sql)
-    {
-        var parse = TsqlParser.Parse(sql);
-        if (!parse.Success || parse.Fragment is not TSqlScript script) return false;
-        if (script.Batches is null || script.Batches.Count == 0) return false;
-
-        var hasSelect = false;
-        foreach (var batch in script.Batches)
-        {
-            foreach (var stmt in batch.Statements)
-            {
-                switch (stmt)
-                {
-                    case SelectStatement:
-                        hasSelect = true;
-                        break;
-                    case SetOnOffStatement:
-                    case SetTransactionIsolationLevelStatement:
-                        break;
-                    default:
-                        return false;
-                }
-            }
-        }
-
-        return hasSelect;
     }
 }

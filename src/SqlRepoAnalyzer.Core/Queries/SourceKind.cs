@@ -10,5 +10,8 @@ public enum SourceKind
 
     /// <summary>Verbatim / interpolated verbatim string in a C# source file (e.g. EF Core raw SQL).</summary>
     CSharpEmbeddedSql = 6,
+
+    /// <summary>Command text argument to classic DAAB <c>SqlHelper.ExecuteDataset</c> (syntax-only extraction).</summary>
+    CSharpSqlHelperExecuteDataset = 7,
 }
 

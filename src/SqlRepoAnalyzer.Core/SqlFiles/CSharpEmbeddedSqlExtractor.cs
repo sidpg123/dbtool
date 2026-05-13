@@ -6,6 +6,7 @@ namespace SqlRepoAnalyzer.Core.SqlFiles;
 /// <summary>
 /// Pulls likely T-SQL from C# string literals: verbatim (<c>@"…"</c>, <c>$@"…"</c>, <c>@$"…"</c>)
 /// and, when chained with <c>+</c>, ordinary <c>"…"</c> fragments merged into one candidate.
+/// Also merges chains that <b>start</b> with an ordinary <c>"…"</c> fragment (typical DAL concatenation).
 /// Skips <c>//</c> and <c>/* */</c> outside literals so commented-out samples are not extracted.
 /// </summary>
 public static class CSharpEmbeddedSqlExtractor
@@ -16,6 +17,21 @@ public static class CSharpEmbeddedSqlExtractor
         var lineStarts = BuildLineStarts(text);
 
         foreach (var (sql, absStart, absEndExclusive) in EnumerateEmbeddedSqlChains(text))
+        {
+            var (sl, sc) = ToLineCol(lineStarts, absStart);
+            var (el, ec) = ToLineCol(lineStarts, Math.Max(absStart, absEndExclusive - 1));
+
+            yield return new QueryCandidate(
+                SourceKind.CSharpEmbeddedSql,
+                filePath,
+                sl,
+                sc,
+                el,
+                ec,
+                sql);
+        }
+
+        foreach (var (sql, absStart, absEndExclusive) in EnumerateRegularStringLedSqlChains(text))
         {
             var (sl, sc) = ToLineCol(lineStarts, absStart);
             var (el, ec) = ToLineCol(lineStarts, Math.Max(absStart, absEndExclusive - 1));
@@ -51,6 +67,82 @@ public static class CSharpEmbeddedSqlExtractor
             var absStart = pos;
             var accum = new StringBuilder();
             if (!TryAppendVerbatimDecoded(t, ref pos, accum))
+            {
+                pos = absStart + 1;
+                continue;
+            }
+
+            SkipWsAndComments(t, ref pos);
+            while (pos < t.Length && t[pos] == '+')
+            {
+                pos++;
+                SkipWsAndComments(t, ref pos);
+                if (TryAppendVerbatimDecoded(t, ref pos, accum))
+                {
+                    SkipWsAndComments(t, ref pos);
+                    continue;
+                }
+
+                if (TryAppendRegularStringDecoded(t, ref pos, accum))
+                {
+                    SkipWsAndComments(t, ref pos);
+                    continue;
+                }
+
+                break;
+            }
+
+            var combined = accum.ToString().Trim();
+            if (!SqlTextHeuristics.LooksLikeSql(combined))
+                continue;
+
+            yield return (combined, absStart, pos);
+        }
+    }
+
+    /// <summary>SQL built from <c>"…"</c> first, then optional <c>+</c> with verbatim or regular fragments.</summary>
+    private static IEnumerable<(string Sql, int AbsStart, int AbsEndExclusive)> EnumerateRegularStringLedSqlChains(string t)
+    {
+        var pos = 0;
+        while (pos < t.Length)
+        {
+            SkipWs(t, ref pos);
+            SkipComments(t, ref pos);
+
+            if (pos >= t.Length)
+                break;
+
+            if (VerbatimOpensAt(t, pos))
+            {
+                var skipFrom = pos;
+                var drain = new StringBuilder();
+                if (TryAppendVerbatimDecoded(t, ref pos, drain))
+                    continue;
+
+                pos = skipFrom + 1;
+                continue;
+            }
+
+            if (pos >= 1 && VerbatimOpensAt(t, pos - 1))
+            {
+                var openAt = pos - 1;
+                var drain = new StringBuilder();
+                if (TryAppendVerbatimDecoded(t, ref openAt, drain))
+                {
+                    pos = openAt;
+                    continue;
+                }
+            }
+
+            if (t[pos] != '"')
+            {
+                pos++;
+                continue;
+            }
+
+            var absStart = pos;
+            var accum = new StringBuilder();
+            if (!TryAppendRegularStringDecoded(t, ref pos, accum))
             {
                 pos = absStart + 1;
                 continue;

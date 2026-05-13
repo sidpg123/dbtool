@@ -64,20 +64,24 @@ public static class Phase3DbRuleService
         var scopedTables = await ResolveReferencedTablesAsync(conn, tableRefsByName.Keys, ct).ConfigureAwait(false);
         var existingTables = scopedTables.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase);
         var objectIds = scopedTables.Values.Distinct().ToArray();
+        var objectIdToQualified = await LoadObjectIdToQualifiedNamesAsync(conn, objectIds, ct).ConfigureAwait(false);
         var rowCounts = await LoadTableRowCountsAsync(conn, objectIds, ct).ConfigureAwait(false);
         var tableIndexInfo = await LoadTableIndexInfoAsync(conn, objectIds, ct).ConfigureAwait(false);
         var indexCatalog = await LoadIndexCatalogAsync(conn, objectIds, ct).ConfigureAwait(false);
         var missingIndexes = await LoadMissingIndexHintsAsync(conn, objectIds, ct).ConfigureAwait(false);
         var triggers = await LoadTriggerDefinitionsAsync(conn, objectIds, ct).ConfigureAwait(false);
+        ApplyLogicalRefCatalogAliases(scopedTables, objectIdToQualified, rowCounts, tableIndexInfo, indexCatalog);
+        var logicalRefToCatalogName = BuildLogicalRefToCatalogQualifiedNameMap(scopedTables, objectIdToQualified);
         var queryIndexRequirements = BuildQueryIndexRequirements(queries, tableRefsByName, queryFingerprintById);
 
         findings.AddRange(CheckUnknownTables(tableRefsByName, existingTables, queryFingerprintById, allQueryIds));
         findings.AddRange(CheckCoveringIndex(tableRefsByName, tableIndexInfo, existingTables, allQueryIds));
-        findings.AddRange(CheckIndexSuitability(queryIndexRequirements, indexCatalog, missingIndexes, allQueryIds));
+        findings.AddRange(CheckIndexSuitability(queryIndexRequirements, indexCatalog, missingIndexes, logicalRefToCatalogName, allQueryIds));
         findings.AddRange(CheckMinimalDatasetExtraction(queries, tableRefsByName, rowCounts, allQueryIds));
         findings.AddRange(CheckHeavyTriggers(triggers, tableRefsByName, allQueryIds));
 
         var columnCatalog = await LoadColumnCatalogAsync(conn, objectIds, ct).ConfigureAwait(false);
+        ApplyLogicalRefAliasesToColumnCatalog(scopedTables, objectIdToQualified, columnCatalog);
         var equalityPairs = CollectEqualityColumnPairs(queries, tableRefsByName);
         findings.AddRange(CheckImplicitConversionRisk(equalityPairs, columnCatalog, allQueryIds));
 
@@ -86,6 +90,7 @@ public static class Phase3DbRuleService
         findings.AddRange(CheckRedundantIndexes(indexCatalog, tableRefsByName, allQueryIds));
 
         var usageRows = await LoadIndexUsageRowsAsync(conn, objectIds, ct).ConfigureAwait(false);
+        ApplyLogicalRefAliasesToIndexUsage(scopedTables, objectIdToQualified, usageRows);
         findings.AddRange(CheckUnusedIndexes(usageRows, indexCatalog, tableRefsByName, allQueryIds));
 
         var fkColumns = await LoadForeignKeyColumnsAsync(conn, objectIds, ct).ConfigureAwait(false);
@@ -307,10 +312,39 @@ public static class Phase3DbRuleService
             };
     }
 
+    private static bool MissingIndexHintMatchesLogicalTable(
+        string requirementLogicalTable,
+        string dmvPhysicalTable,
+        IReadOnlyDictionary<string, string> logicalRefToCatalogQualifiedName)
+    {
+        if (string.Equals(requirementLogicalTable, dmvPhysicalTable, StringComparison.OrdinalIgnoreCase))
+            return true;
+        return logicalRefToCatalogQualifiedName.TryGetValue(requirementLogicalTable, out var physical)
+               && string.Equals(physical, dmvPhysicalTable, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Maps each referenced qualified name (including synonyms) to the resolved user table/view name in catalog form.
+    /// </summary>
+    private static Dictionary<string, string> BuildLogicalRefToCatalogQualifiedNameMap(
+        IReadOnlyDictionary<string, int> scopedTables,
+        IReadOnlyDictionary<int, string> objectIdToQualified)
+    {
+        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (refKey, oid) in scopedTables)
+        {
+            if (objectIdToQualified.TryGetValue(oid, out var canon))
+                map[refKey] = canon;
+        }
+
+        return map;
+    }
+
     private static IEnumerable<Phase3RuleFinding> CheckIndexSuitability(
         IReadOnlyList<QueryIndexRequirement> requirements,
         IReadOnlyDictionary<string, List<TableIndexDefinition>> indexCatalog,
         List<(string Table, string EqCols, string IneqCols, string IncCols, decimal ImpactScore)> missingHints,
+        IReadOnlyDictionary<string, string> logicalRefToCatalogQualifiedName,
         IReadOnlyList<string> allQueryIds)
     {
         var findings = new List<Phase3RuleFinding>();
@@ -363,7 +397,8 @@ public static class Phase3DbRuleService
         findings.AddRange(failures);
 
         var relevant = missingHints
-            .Where(h => requirements.Any(r => string.Equals(r.Table, h.Table, StringComparison.OrdinalIgnoreCase)))
+            .Where(h => requirements.Any(r =>
+                MissingIndexHintMatchesLogicalTable(r.Table, h.Table, logicalRefToCatalogQualifiedName)))
             .OrderByDescending(h => h.ImpactScore)
             .Take(20)
             .ToList();
@@ -383,30 +418,50 @@ public static class Phase3DbRuleService
 
         foreach (var h in relevant)
         {
-            var queryIds = requirements
-                .Where(r => string.Equals(r.Table, h.Table, StringComparison.OrdinalIgnoreCase))
-                .Select(r => r.QueryId)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
+            var matchedLogical = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var queryIdSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var r in requirements)
+            {
+                if (!MissingIndexHintMatchesLogicalTable(r.Table, h.Table, logicalRefToCatalogQualifiedName))
+                    continue;
+                if (!string.IsNullOrWhiteSpace(r.QueryId))
+                    queryIdSet.Add(r.QueryId);
+                matchedLogical.Add(r.Table);
+            }
+
+            var queryIds = queryIdSet.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToArray();
+            var logicalAliases = matchedLogical
+                .Where(t => !string.Equals(t, h.Table, StringComparison.OrdinalIgnoreCase))
                 .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
                 .ToArray();
+
+            var message = logicalAliases.Length > 0
+                ? $"Missing index hint for base object `{h.Table}` (queried as {string.Join(", ", logicalAliases.Select(t => $"`{t}`"))})."
+                : $"Missing index hint detected for `{h.Table}`.";
+
+            var evidence = new Dictionary<string, object?>
+            {
+                ["equalityColumns"] = h.EqCols,
+                ["inequalityColumns"] = h.IneqCols,
+                ["includedColumns"] = h.IncCols,
+                ["impactScore"] = h.ImpactScore,
+                ["suggestedIndexCreationScript"] = BuildDmMissingIndexPlaceholderSql(h.Table, h.EqCols, h.IneqCols, h.IncCols)
+            };
+            if (logicalAliases.Length > 0)
+                evidence["queriedTableNames"] = logicalAliases;
 
             findings.Add(new Phase3RuleFinding
             {
                 RuleId = "db.index_suitability",
                 Status = "warn",
                 Severity = "warn",
-                Message = $"Missing index hint detected for `{h.Table}`.",
+                Message = message,
                 Recommendation = "Use DMV columns as hints only; assemble CREATE INDEX DDL manually after review.",
-                AffectedObjects = new[] { h.Table },
+                AffectedObjects = logicalAliases.Length > 0
+                    ? new[] { h.Table }.Concat(logicalAliases).ToArray()
+                    : new[] { h.Table },
                 QueryIds = queryIds,
-                Evidence = new Dictionary<string, object?>
-                {
-                    ["equalityColumns"] = h.EqCols,
-                    ["inequalityColumns"] = h.IneqCols,
-                    ["includedColumns"] = h.IncCols,
-                    ["impactScore"] = h.ImpactScore,
-                    ["indexCreationScript"] = BuildDmMissingIndexPlaceholderSql(h.Table, h.EqCols, h.IneqCols, h.IncCols)
-                }
+                Evidence = evidence
             });
         }
 
@@ -610,13 +665,13 @@ public static class Phase3DbRuleService
 
         var idSql = string.Join(", ", objectIds.Select((_, i) => $"@id{i}"));
         var sql = $"""
-SELECT s.name AS schema_name, t.name AS table_name, c.name AS column_name,
+SELECT s.name AS schema_name, o.name AS table_name, c.name AS column_name,
        c.system_type_id, c.user_type_id,
        tp.name AS type_name,
        c.collation_name
 FROM sys.columns c
-JOIN sys.tables t ON t.object_id = c.object_id
-JOIN sys.schemas s ON s.schema_id = t.schema_id
+JOIN sys.objects o ON o.object_id = c.object_id AND o.type IN ('U', 'V')
+JOIN sys.schemas s ON s.schema_id = o.schema_id
 JOIN sys.types tp ON tp.user_type_id = c.user_type_id
 WHERE c.object_id IN ({idSql});
 """;
@@ -913,7 +968,7 @@ JOIN sys.schemas s ON s.schema_id = o.schema_id
 CROSS APPLY sys.dm_db_stats_properties(st.object_id, st.stats_id) sp
 WHERE st.object_id IN ({0})
   AND st.auto_created = 0
-  AND o.type = 'U';
+  AND o.type IN ('U', 'V');
 """;
 
         var idSql = string.Join(", ", objectIds.Select((_, i) => $"@id{i}"));
@@ -1411,10 +1466,15 @@ WITH refs(schema_name, table_name) AS (
     SELECT v.schema_name, v.table_name
     FROM (VALUES {valuesSql}) AS v(schema_name, table_name)
 )
-SELECT r.schema_name, r.table_name, t.object_id
+SELECT r.schema_name, r.table_name,
+       COALESCE(tb.object_id, vw.object_id, snb.object_id) AS resolved_object_id
 FROM refs r
-JOIN sys.schemas s ON s.name = r.schema_name
-JOIN sys.tables t ON t.schema_id = s.schema_id AND t.name = r.table_name;
+JOIN sys.schemas sch ON sch.name = r.schema_name
+LEFT JOIN sys.tables tb ON tb.schema_id = sch.schema_id AND tb.name = r.table_name
+LEFT JOIN sys.views vw ON vw.schema_id = sch.schema_id AND vw.name = r.table_name
+LEFT JOIN sys.synonyms sn ON sn.schema_id = sch.schema_id AND sn.name = r.table_name
+LEFT JOIN sys.objects snb ON snb.object_id = sn.base_object_id
+WHERE COALESCE(tb.object_id, vw.object_id, snb.object_id) IS NOT NULL;
 """;
 
         await using var cmd = new SqlCommand(sql, conn) { CommandType = CommandType.Text };
@@ -1432,7 +1492,200 @@ JOIN sys.tables t ON t.schema_id = s.schema_id AND t.name = r.table_name;
             map[key] = objectId;
         }
 
+        if (map.Count == 0)
+            return map;
+
+        var forward = await LoadSynonymForwardEdgesAsync(conn, map.Values.Distinct().ToArray(), ct).ConfigureAwait(false);
+        foreach (var key in map.Keys.ToArray())
+            map[key] = ResolveThroughSynonymEdges(map[key], forward);
+
+        await FilterScopedTablesToUserTablesAndViewsAsync(conn, map, ct).ConfigureAwait(false);
         return map;
+    }
+
+    private static async Task<Dictionary<int, int>> LoadSynonymForwardEdgesAsync(
+        SqlConnection conn,
+        IReadOnlyCollection<int> seedObjectIds,
+        CancellationToken ct)
+    {
+        var forward = new Dictionary<int, int>();
+        var frontier = new HashSet<int>(seedObjectIds.Where(id => id != 0));
+        for (var hop = 0; hop < 16 && frontier.Count > 0; hop++)
+        {
+            var ids = frontier.ToArray();
+            frontier.Clear();
+            var idSql = string.Join(", ", ids.Select((_, i) => $"@id{i}"));
+            var sql = $"""
+SELECT sn.object_id, sn.base_object_id, bt.type AS base_type
+FROM sys.synonyms sn
+JOIN sys.objects bt ON bt.object_id = sn.base_object_id
+WHERE sn.object_id IN ({idSql});
+""";
+            await using var cmd = new SqlCommand(sql, conn) { CommandType = CommandType.Text };
+            AddObjectIdParameters(cmd, ids);
+            await using var rdr = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+            while (await rdr.ReadAsync(ct).ConfigureAwait(false))
+            {
+                var synOid = rdr.GetInt32(0);
+                var baseOid = rdr.GetInt32(1);
+                var baseType = rdr.IsDBNull(2) ? "" : rdr.GetString(2);
+                forward[synOid] = baseOid;
+                if (string.Equals(baseType, "SN", StringComparison.OrdinalIgnoreCase))
+                    frontier.Add(baseOid);
+            }
+        }
+
+        return forward;
+    }
+
+    private static int ResolveThroughSynonymEdges(int objectId, IReadOnlyDictionary<int, int> forward)
+    {
+        var current = objectId;
+        for (var guard = 0; guard < 32 && forward.TryGetValue(current, out var next); guard++)
+            current = next;
+        return current;
+    }
+
+    private static async Task FilterScopedTablesToUserTablesAndViewsAsync(
+        SqlConnection conn,
+        Dictionary<string, int> map,
+        CancellationToken ct)
+    {
+        var ids = map.Values.Where(id => id != 0).Distinct().ToArray();
+        if (ids.Length == 0)
+            return;
+
+        var idSql = string.Join(", ", ids.Select((_, i) => $"@id{i}"));
+        var sql = $"""
+SELECT object_id
+FROM sys.objects
+WHERE object_id IN ({idSql})
+  AND type IN ('U', 'V');
+""";
+        await using var cmd = new SqlCommand(sql, conn) { CommandType = CommandType.Text };
+        AddObjectIdParameters(cmd, ids);
+        await using var rdr = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        var allowed = new HashSet<int>();
+        while (await rdr.ReadAsync(ct).ConfigureAwait(false))
+            allowed.Add(rdr.GetInt32(0));
+
+        foreach (var key in map.Keys.ToArray())
+        {
+            if (!allowed.Contains(map[key]))
+                map.Remove(key);
+        }
+    }
+
+    private static async Task<Dictionary<int, string>> LoadObjectIdToQualifiedNamesAsync(
+        SqlConnection conn,
+        IReadOnlyCollection<int> objectIds,
+        CancellationToken ct)
+    {
+        var result = new Dictionary<int, string>();
+        if (objectIds.Count == 0)
+            return result;
+
+        var idSql = string.Join(", ", objectIds.Select((_, i) => $"@id{i}"));
+        var sql = $"""
+SELECT o.object_id, s.name AS schema_name, o.name AS object_name
+FROM sys.objects o
+JOIN sys.schemas s ON s.schema_id = o.schema_id
+WHERE o.object_id IN ({idSql})
+  AND o.type IN ('U', 'V');
+""";
+        await using var cmd = new SqlCommand(sql, conn) { CommandType = CommandType.Text };
+        AddObjectIdParameters(cmd, objectIds);
+        await using var rdr = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        while (await rdr.ReadAsync(ct).ConfigureAwait(false))
+        {
+            var oid = rdr.GetInt32(0);
+            var sch = rdr.GetString(1);
+            var name = rdr.GetString(2);
+            result[oid] = $"{sch}.{name}";
+        }
+
+        return result;
+    }
+
+    private static void ApplyLogicalRefCatalogAliases(
+        IReadOnlyDictionary<string, int> scopedTables,
+        IReadOnlyDictionary<int, string> objectIdToQualified,
+        Dictionary<string, long> rowCounts,
+        Dictionary<string, (int UsableIndexes, bool IsHeap)> tableIndexInfo,
+        Dictionary<string, List<TableIndexDefinition>> indexCatalog)
+    {
+        foreach (var (refKey, oid) in scopedTables)
+        {
+            if (!objectIdToQualified.TryGetValue(oid, out var canon))
+                continue;
+            if (string.Equals(refKey, canon, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            if (rowCounts.TryGetValue(canon, out var rc))
+                rowCounts[refKey] = rc;
+            else if (!rowCounts.ContainsKey(refKey))
+                rowCounts[refKey] = 0L;
+
+            if (tableIndexInfo.TryGetValue(canon, out var tii))
+                tableIndexInfo[refKey] = tii;
+
+            if (indexCatalog.TryGetValue(canon, out var ixList))
+                indexCatalog[refKey] = ixList;
+        }
+    }
+
+    private static void ApplyLogicalRefAliasesToColumnCatalog(
+        IReadOnlyDictionary<string, int> scopedTables,
+        IReadOnlyDictionary<int, string> objectIdToQualified,
+        Dictionary<string, CatalogColumnMeta> columnCatalog)
+    {
+        var additions = new List<(string Key, CatalogColumnMeta Meta)>();
+        foreach (var (refKey, oid) in scopedTables)
+        {
+            if (!objectIdToQualified.TryGetValue(oid, out var canon))
+                continue;
+            if (string.Equals(refKey, canon, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var prefix = $"{canon}.";
+            foreach (var kv in columnCatalog)
+            {
+                if (!kv.Key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                var suffix = kv.Key[prefix.Length..];
+                additions.Add(($"{refKey}.{suffix}", kv.Value));
+            }
+        }
+
+        foreach (var (key, meta) in additions)
+            columnCatalog[key] = meta;
+    }
+
+    private static void ApplyLogicalRefAliasesToIndexUsage(
+        IReadOnlyDictionary<string, int> scopedTables,
+        IReadOnlyDictionary<int, string> objectIdToQualified,
+        Dictionary<string, (long Reads, long Writes)> usageByTableIndex)
+    {
+        var additions = new List<(string Key, (long Reads, long Writes) Value)>();
+        foreach (var (refKey, oid) in scopedTables)
+        {
+            if (!objectIdToQualified.TryGetValue(oid, out var canon))
+                continue;
+            if (string.Equals(refKey, canon, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var prefix = $"{canon}::";
+            foreach (var kv in usageByTableIndex.ToArray())
+            {
+                if (!kv.Key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                var idxPart = kv.Key[prefix.Length..];
+                additions.Add(($"{refKey}::{idxPart}", kv.Value));
+            }
+        }
+
+        foreach (var (key, val) in additions)
+            usageByTableIndex.TryAdd(key, val);
     }
 
     private static async Task<Dictionary<string, long>> LoadTableRowCountsAsync(
@@ -1446,12 +1699,19 @@ JOIN sys.tables t ON t.schema_id = s.schema_id AND t.name = r.table_name;
 
         var idSql = string.Join(", ", objectIds.Select((_, i) => $"@id{i}"));
         var sql = $"""
-SELECT s.name AS schema_name, t.name AS table_name, SUM(ps.row_count) AS row_count
-FROM sys.tables t
-JOIN sys.schemas s ON s.schema_id = t.schema_id
-JOIN sys.dm_db_partition_stats ps ON ps.object_id = t.object_id AND ps.index_id IN (0,1)
-WHERE t.object_id IN ({idSql})
-GROUP BY s.name, t.name;
+SELECT q.schema_name, q.object_name AS table_name, COALESCE(SUM(ps.row_count), 0) AS row_count
+FROM (
+    SELECT t.object_id, s.name AS schema_name, t.name AS object_name
+    FROM sys.tables t
+    JOIN sys.schemas s ON s.schema_id = t.schema_id
+    UNION ALL
+    SELECT v.object_id, s.name, v.name
+    FROM sys.views v
+    JOIN sys.schemas s ON s.schema_id = v.schema_id
+) q
+LEFT JOIN sys.dm_db_partition_stats ps ON ps.object_id = q.object_id AND ps.index_id IN (0, 1)
+WHERE q.object_id IN ({idSql})
+GROUP BY q.schema_name, q.object_name;
 """;
         await using var cmd = new SqlCommand(sql, conn) { CommandType = CommandType.Text };
         AddObjectIdParameters(cmd, objectIds);
@@ -1478,14 +1738,15 @@ GROUP BY s.name, t.name;
         var sql = $"""
 SELECT
     s.name AS schema_name,
-    t.name AS table_name,
+    o.name AS table_name,
     SUM(CASE WHEN i.index_id > 0 AND i.is_hypothetical = 0 AND i.is_disabled = 0 THEN 1 ELSE 0 END) AS usable_indexes,
     MAX(CASE WHEN i.type_desc = 'HEAP' THEN 1 ELSE 0 END) AS is_heap
-FROM sys.tables t
-JOIN sys.schemas s ON s.schema_id = t.schema_id
-LEFT JOIN sys.indexes i ON i.object_id = t.object_id
-WHERE t.object_id IN ({idSql})
-GROUP BY s.name, t.name;
+FROM sys.objects o
+JOIN sys.schemas s ON s.schema_id = o.schema_id
+LEFT JOIN sys.indexes i ON i.object_id = o.object_id
+WHERE o.object_id IN ({idSql})
+  AND o.type IN ('U', 'V')
+GROUP BY s.name, o.name;
 """;
         await using var cmd = new SqlCommand(sql, conn) { CommandType = CommandType.Text };
         AddObjectIdParameters(cmd, objectIds);
@@ -1513,7 +1774,7 @@ GROUP BY s.name, t.name;
         var sql = $"""
 SELECT
     s.name AS schema_name,
-    t.name AS table_name,
+    o.name AS table_name,
     i.name AS index_name,
     i.index_id,
     i.is_hypothetical,
@@ -1522,13 +1783,14 @@ SELECT
     ic.key_ordinal,
     ic.is_included_column,
     c.name AS column_name
-FROM sys.tables t
-JOIN sys.schemas s ON s.schema_id = t.schema_id
-JOIN sys.indexes i ON i.object_id = t.object_id AND i.index_id > 0
+FROM sys.objects o
+JOIN sys.schemas s ON s.schema_id = o.schema_id
+JOIN sys.indexes i ON i.object_id = o.object_id AND i.index_id > 0
 LEFT JOIN sys.index_columns ic ON ic.object_id = i.object_id AND ic.index_id = i.index_id
 LEFT JOIN sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
-WHERE t.object_id IN ({idSql})
-ORDER BY s.name, t.name, i.name, ic.key_ordinal, ic.index_column_id;
+WHERE o.object_id IN ({idSql})
+  AND o.type IN ('U', 'V')
+ORDER BY s.name, o.name, i.name, ic.key_ordinal, ic.index_column_id;
 """;
 
         await using var cmd = new SqlCommand(sql, conn) { CommandType = CommandType.Text };
@@ -1742,7 +2004,7 @@ WHERE tr.parent_class_desc = 'OBJECT_OR_COLUMN'
             ["whereJoinColumns"] = preds,
             ["selectListColumns"] = projs,
             ["reason"] = reason,
-            ["indexCreationScript"] = suggestedSql
+            ["suggestedIndexCreationScript"] = suggestedSql
         };
 
         if (availableIndexes is { Count: > 0 })

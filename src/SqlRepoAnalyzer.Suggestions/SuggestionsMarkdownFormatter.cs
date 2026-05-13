@@ -82,7 +82,7 @@ public static class SuggestionsMarkdownFormatter
 
         foreach (var s in ordered)
         {
-            sb.AppendLine($"### `{MdEscape(s.QueryId)}`");
+            sb.AppendLine($"### Query ID:  `{MdEscape(s.QueryId)}`");
             sb.AppendLine();
             sb.AppendLine("| Field | Value |");
             sb.AppendLine("|-------|-------|");
@@ -126,49 +126,6 @@ public static class SuggestionsMarkdownFormatter
                 sb.Append(MdCellOneLine(f.Message)).AppendLine(" |");
             }
             sb.AppendLine();
-
-            var withDetail = s.Findings.Where(f => !string.IsNullOrWhiteSpace(f.Suggestion) || f.Evidence is { Count: > 0 }).ToList();
-            if (withDetail.Count > 0)
-            {
-                sb.AppendLine("#### Finding detail (suggestions, locations & evidence)");
-                sb.AppendLine();
-                foreach (var f in withDetail.OrderByDescending(x => x.Severity).ThenBy(x => x.RuleId, StringComparer.OrdinalIgnoreCase))
-                {
-                    var n = GetOccurrenceCount(f);
-                    var countSuffix = n > 1 ? $" — ×{n}" : "";
-                    sb.AppendLine($"##### `{MdEscape(f.RuleId)}` ({MdEscape(f.Severity.ToString())}){countSuffix}");
-                    sb.AppendLine();
-                    if (!string.IsNullOrWhiteSpace(f.Suggestion))
-                        sb.AppendLine($"- **Suggestion:** {MdParagraph(f.Suggestion)}");
-
-                    var locLine = FormatOccurrenceLocationsLine(f.Evidence);
-                    if (!string.IsNullOrEmpty(locLine))
-                        sb.AppendLine($"- **Locations:** {locLine}");
-
-                    if (f.Evidence is { Count: > 0 } ev && HasEvidenceBeyondOccurrences(ev))
-                    {
-                        var dump = FilterEvidenceForJsonDump(ev);
-                        if (dump.Count > 0)
-                        {
-                            sb.AppendLine("- **Evidence:**");
-                            sb.AppendLine();
-                            sb.AppendLine("```json");
-                            try
-                            {
-                                sb.AppendLine(JsonSerializer.Serialize(dump, EvidenceJsonOptions));
-                            }
-                            catch
-                            {
-                                sb.AppendLine("{ \"_note\": \"evidence serialization failed\" }");
-                            }
-                            sb.AppendLine("```");
-                        }
-                    }
-
-                    sb.AppendLine();
-                }
-            }
-
             sb.AppendLine("---");
             sb.AppendLine();
         }

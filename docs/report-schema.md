@@ -97,8 +97,8 @@ Emitted by `plan` as a JSON object for DB-connected checks. The same command wri
   - `affectedObjects` (array of strings)
   - `queryIds` (array of strings) — which queries the finding relates to where applicable
   - `evidence` (object \| null)
-    - For `db.index_suitability` failures: typically `whereJoinColumns` (columns from WHERE/JOIN used as index keys in the heuristic), `selectListColumns` (columns from SELECT needing cover via INCLUDE where applicable), `indexCreationScript` (templated `CREATE INDEX` DDL for review—bracket‑quoted IDs; validate before deploying).
-    - For `db.index_suitability` DMV warnings: `equalityColumns`, `inequalityColumns`, `includedColumns`, `impactScore`, plus `indexCreationScript` (plain skeleton `CREATE INDEX` — fill keys/includes from DMV fields after normalization).
+    - For `db.index_suitability` failures: typically `whereJoinColumns` (columns from WHERE/JOIN used as index keys in the heuristic), `selectListColumns` (columns from SELECT needing cover via INCLUDE where applicable), `suggestedIndexCreationScript` (templated `CREATE INDEX` DDL for review—bracket‑quoted IDs; validate before deploying).
+    - For `db.index_suitability` DMV warnings: `equalityColumns`, `inequalityColumns`, `includedColumns`, `impactScore`, plus `suggestedIndexCreationScript` (plain skeleton `CREATE INDEX` — fill keys/includes from DMV fields after normalization).
 - `byRule` (array)
   - `ruleId` (string)
   - `pass` (number)

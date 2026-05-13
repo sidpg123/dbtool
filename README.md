@@ -38,11 +38,11 @@ dotnet run -- scan --root "c:\Users\NinadBandiwadekarIND\Repos\DB Optimization T
 
 # 2b) inventory only static SELECT queries (exclude dynamic/no-SQL entries)
 dotnet run -- scan --root "c:\Users\NinadBandiwadekarIND\Repos\DB Optimization Tool\dbtool" --out "c:\Users\NinadBandiwadekarIND\Repos\DB Optimization Tool\dbtool\.sqltool" --query-scope select
+```
 
-**Scan notes:** `.sql` text is split on **semicolons** (script `GO` is also honored). Statements not separated by `;` stay in **one** inventory blob. **`--query-scope select`** keeps only fragments that parse as *only* static `SELECT`s; if a blob mixes `SELECT` + `MERGE` / `INSERT` / `DELETE` / etc., or you use `select` scope with almost no qualifying batches, `queries.json` can be **`[]`** even when the file obviously contains `SELECT`. Use default **`--query-scope all`** (or omit the flag) to inventory everything.
+**Scan notes:** `.sql` text is split on **semicolons** (script `GO` is also honored). Statements not separated by `;` stay in **one** inventory blob. **`--query-scope select`** keeps fragments that parse as read-oriented batches: `SELECT`, `DECLARE` variables, `SET` options, and nested `BEGIN…END` blocks containing only those forms (still rejects `INSERT`/`UPDATE`/`DELETE`/`MERGE`/etc.). Use **`--query-scope all`** when you want every extracted string. **C#:** text is pulled from verbatim literals, `"…"`-led `+` chains that look like SQL, and `SqlHelper.ExecuteDataset` / `ExecuteScalar` / `ExecuteNonQuery` / `ExecuteReader` command text (including permissive stitching of `+` with parameters).
 
-**C# backends:** **`scan`** crawls **`*.cs`** and pulls T-SQL from **verbatim** strings (`@"…"`, `$@"…"`, `@$"…"`) whose text looks like SQL (starts with keywords such as `SELECT`, `MERGE`, `CREATE`, …). Put raw SQL in a verbatim literal for best results; normal `"…"` strings are not mined. `**bin`** / *`*obj`** folders are skipped.
-
+```powershell
 # 3) suggestions
 dotnet run -- suggest --root "c:\Users\NinadBandiwadekarIND\Repos\DB Optimization Tool\dbtool" --out "c:\Users\NinadBandiwadekarIND\Repos\DB Optimization Tool\dbtool\.sqltool"
 
@@ -104,6 +104,22 @@ Checked-in sample template: `.sqltool/db-connections.example.json` (copy to `.sq
 
 **Incremental scan:** each `scan` overwrites `queries.json` with the full inventory. It compares to `scan-state.json` from the previous run, writes only new/changed rows to `queries.incremental.json`, then updates `scan-state.json`. First run (or missing state) treats every query as incremental. **`plan`** still uses full `queries.json` only.
 
+## Recent changes (scan, C# extraction, Phase 3 `plan`)
+
+### `scan` and `--query-scope select`
+
+- **`--query-scope select`** classification moved to **`SelectScopeSqlClassifier`** in Core. It now treats batches as “read inventory” when they contain only **`SELECT`**, **`DECLARE` variable** statements, common **`SET`** forms (`SET` on/off, transaction isolation, variable assignment, text size, error level), and nested **`BEGIN…END`** whose inner statements also pass the same rules. Anything else (for example **`INSERT` / `UPDATE` / `DELETE` / `MERGE`**) still fails the filter. Empty batches are skipped instead of failing the whole script.
+- **C# embedded SQL:** besides verbatim `@"…"` / `$@"…"` chains, **`CSharpEmbeddedSqlExtractor`** also collects **`"…"`-first** string concatenations that merge with `+` (verbatim or regular fragments) when the merged text passes **`SqlTextHeuristics.LooksLikeSql`** (typical DAL `"...'" + param + "'"` style).
+- **Classic DAAB `SqlHelper`:** **`CSharpSqlHelperExecuteDatasetExtractor`** (Roslyn, syntax-only) pulls command text from **`SqlHelper.ExecuteDataset`**, **`ExecuteScalar`**, **`ExecuteNonQuery`**, and **`ExecuteReader`** for the usual `(…, CommandType, commandText, …)` overload (third argument is the SQL string). It resolves **`const`** and **`static readonly string`** fields file-wide, **`string` / `var`** locals declared **before** the call in the same method/accessor body, and uses **permissive `+` stitching** (unknown expression fragments become empty text; candidate marked **`partial`** in `queries.json`). New **`SourceKind`**: **`CSharpSqlHelperExecuteDataset`**. Core references **`Microsoft.CodeAnalysis.CSharp`**.
+
+### Phase 3 `plan` (DB rules)
+
+- **`schema.unknown_table`:** referenced `schema.object` is resolved against **`sys.tables`**, **`sys.views`**, and **`sys.synonyms`**; synonym chains are walked to a **`sys.objects`** target of type **user table (`U`) or view (`V`)**. Unresolvable or non-table/view targets stay “unknown.”
+- **Catalog for synonyms / views:** index, row-count, column, and related maps are keyed by the **logical** reference where needed; **`db.stats_freshness`** includes **views** (`U` and `V`) where applicable.
+- **`db.index_suitability`:** missing-index DMV rows stay keyed by the **physical** base object; requirements that use a **synonym** (or other logical name) are matched via a **logical → catalog name** map. Placeholder **`CREATE INDEX`** text targets the base table/view. When the query text used a synonym, the warn message / evidence can include **`queriedTableNames`**.
+
+See **`docs/rules-requiring-db-connection.md`** for the updated rule descriptions.
+
 ## Recent fixes (this branch)
 
 Phase 2 `**suggest**` rule behavior:
@@ -118,7 +134,7 @@ Re-run `**suggest`** after pulling to refresh `suggestions.json` / `markdown/sug
 ## Notes
 
 - `--verbose` = more detailed logs in terminal.
-- `--query-scope all|select` (scan only): default `all` inventories all extracted SQL. `select` keeps only fragments whose parse tree is purely static SELECT statements—mixed DDL/DML/multiple verbs in one **unsplit** fragment are dropped; omit the flag when you see an empty inventory but know SQL exists (see Quick start note).
+- `--query-scope all|select` (scan only): default `all` inventories all extracted SQL. `select` keeps fragments that parse as read-oriented T-SQL (see Quick start **Scan notes**); mixed DML/DDL in one unsplit fragment is still dropped. Omit the flag when you need full coverage.
 - VS Code/Cursor tasks are available in `.vscode/tasks.json` (`doctor`, `scan`, `suggest`, `custom args`).
 
 ## Rules which are yet to create
@@ -126,4 +142,7 @@ Re-run `**suggest`** after pulling to refresh `suggestions.json` / `markdown/sug
 - 3.7
 - 3.8
 - 3.9
+
+
+dotnet run -- scan --root "C:\Users\SiddharthPatilINDev\Documents\work\Synchronizer\JiBe.Synchronizer.Office.SharedLogic\Appcode" --out "C:\Users\SiddharthPatilINDev\Documents\DB_Tool\testBackend\.sqltool" --query-scope select
 
