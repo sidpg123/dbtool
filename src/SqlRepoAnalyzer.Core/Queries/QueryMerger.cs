@@ -19,6 +19,8 @@ public static class QueryMerger
             if (!string.IsNullOrWhiteSpace(c.SqlText))
             {
                 var normalized = SqlFingerprint.Normalize(c.SqlText!);
+                if (!string.IsNullOrWhiteSpace(c.ParameterBindingsJson))
+                    normalized += "\n" + c.ParameterBindingsJson.Trim();
                 fingerprint = SqlFingerprint.Sha256Hex(normalized);
                 queryId = $"q_{fingerprint[..16]}";
             }
@@ -39,6 +41,7 @@ public static class QueryMerger
                     SqlText = c.SqlText,
                     SourceKind = c.SourceKind,
                     Completeness = c.Completeness,
+                    ParameterBindingsJson = c.ParameterBindingsJson,
                     Occurrences = new List<QueryOccurrence>(),
                     OccurrenceKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
                 };
@@ -50,6 +53,9 @@ public static class QueryMerger
             {
                 mr.Occurrences.Add(occurrence);
             }
+
+            if (!string.IsNullOrWhiteSpace(c.ParameterBindingsJson) && string.IsNullOrWhiteSpace(mr.ParameterBindingsJson))
+                mr.ParameterBindingsJson = c.ParameterBindingsJson;
         }
 
         return recordsById.Values
@@ -59,8 +65,8 @@ public static class QueryMerger
                 m.SqlText,
                 m.SourceKind,
                 m.Completeness,
-                m.Occurrences
-            ))
+                m.Occurrences,
+                m.ParameterBindingsJson))
             .OrderBy(r => r.QueryId, StringComparer.OrdinalIgnoreCase)
             .ToList();
     }
@@ -79,6 +85,7 @@ public static class QueryMerger
         public required string? SqlText { get; init; }
         public required SourceKind SourceKind { get; init; }
         public required string? Completeness { get; init; }
+        public string? ParameterBindingsJson { get; set; }
         public required List<QueryOccurrence> Occurrences { get; init; }
         public required HashSet<string> OccurrenceKeys { get; init; }
     }

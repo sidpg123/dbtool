@@ -8,7 +8,7 @@ using SqlRepoAnalyzer.Core.Tsql;
 
 namespace SqlRepoAnalyzer.Core.Phase3;
 
-public static class Phase3DbRuleService
+public static partial class Phase3DbRuleService
 {
     private static readonly string[] RuleIds =
     {
@@ -18,6 +18,7 @@ public static class Phase3DbRuleService
         "db.minimal_dataset_extraction",
         "db.heavy_trigger_impact",
         "db.implicit_conversion_risk",
+        "db.parameter_type_mismatch",
         "db.stats_freshness",
         "db.redundant_indexes",
         "db.unused_indexes",
@@ -84,6 +85,7 @@ public static class Phase3DbRuleService
         ApplyLogicalRefAliasesToColumnCatalog(scopedTables, objectIdToQualified, columnCatalog);
         var equalityPairs = CollectEqualityColumnPairs(queries, tableRefsByName);
         findings.AddRange(CheckImplicitConversionRisk(equalityPairs, columnCatalog, allQueryIds));
+        findings.AddRange(CheckParameterColumnTypeMismatch(queries, tableRefsByName, columnCatalog, allQueryIds));
 
         findings.AddRange(await CheckStatsFreshnessAsync(conn, scopedTables, rowCounts, objectIds, allQueryIds, ct).ConfigureAwait(false));
 
@@ -1473,7 +1475,7 @@ JOIN sys.schemas sch ON sch.name = r.schema_name
 LEFT JOIN sys.tables tb ON tb.schema_id = sch.schema_id AND tb.name = r.table_name
 LEFT JOIN sys.views vw ON vw.schema_id = sch.schema_id AND vw.name = r.table_name
 LEFT JOIN sys.synonyms sn ON sn.schema_id = sch.schema_id AND sn.name = r.table_name
-LEFT JOIN sys.objects snb ON snb.object_id = sn.base_object_id
+LEFT JOIN sys.objects snb ON snb.object_id = OBJECT_ID(sn.base_object_name)
 WHERE COALESCE(tb.object_id, vw.object_id, snb.object_id) IS NOT NULL;
 """;
 
@@ -1484,12 +1486,14 @@ WHERE COALESCE(tb.object_id, vw.object_id, snb.object_id) IS NOT NULL;
             cmd.Parameters.AddWithValue($"@t{i}", refs[i].Table);
         }
 
-        await using var rdr = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
-        while (await rdr.ReadAsync(ct).ConfigureAwait(false))
         {
-            var key = $"{rdr.GetString(0)}.{rdr.GetString(1)}";
-            var objectId = rdr.GetInt32(2);
-            map[key] = objectId;
+            await using var rdr = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+            while (await rdr.ReadAsync(ct).ConfigureAwait(false))
+            {
+                var key = $"{rdr.GetString(0)}.{rdr.GetString(1)}";
+                var objectId = rdr.GetInt32(2);
+                map[key] = objectId;
+            }
         }
 
         if (map.Count == 0)
@@ -1516,10 +1520,11 @@ WHERE COALESCE(tb.object_id, vw.object_id, snb.object_id) IS NOT NULL;
             frontier.Clear();
             var idSql = string.Join(", ", ids.Select((_, i) => $"@id{i}"));
             var sql = $"""
-SELECT sn.object_id, sn.base_object_id, bt.type AS base_type
+SELECT sn.object_id, OBJECT_ID(sn.base_object_name) AS base_object_id, bt.type AS base_type
 FROM sys.synonyms sn
-JOIN sys.objects bt ON bt.object_id = sn.base_object_id
-WHERE sn.object_id IN ({idSql});
+JOIN sys.objects bt ON bt.object_id = OBJECT_ID(sn.base_object_name)
+WHERE sn.object_id IN ({idSql})
+  AND OBJECT_ID(sn.base_object_name) IS NOT NULL;
 """;
             await using var cmd = new SqlCommand(sql, conn) { CommandType = CommandType.Text };
             AddObjectIdParameters(cmd, ids);

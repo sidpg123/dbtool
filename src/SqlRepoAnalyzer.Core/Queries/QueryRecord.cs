@@ -6,6 +6,5 @@ public sealed record QueryRecord(
     string? SqlText,
     SourceKind SourceKind,
     string? Completeness,
-    IReadOnlyList<QueryOccurrence> Occurrences
-);
-
+    IReadOnlyList<QueryOccurrence> Occurrences,
+    string? ParameterBindingsJson = null);

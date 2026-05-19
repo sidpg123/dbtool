@@ -9,7 +9,7 @@ Implemented by **`plan`** (`Phase3PlansReport` in **`plans.json`**) using **`db-
 ### Core schema and index fit
 
 - **`schema.unknown_table`**  
-  Static references are resolved against **`sys.tables`**, **`sys.views`**, and **`sys.synonyms`** for the chosen environment (synonyms are followed to their **`base_object_id`**, including chained synonyms, and must resolve to a user table or view); unmatched references produce fail findings.
+  Static references are resolved against **`sys.tables`**, **`sys.views`**, and **`sys.synonyms`** for the chosen environment (synonyms are followed using **`sys.synonyms.base_object_name`** with **`OBJECT_ID(...)`**, including chained synonyms, and must resolve to a user table or view); unmatched references produce fail findings.
 
 - **`db.covering_index`**  
   Live index metadata counts usable indexes vs heap heuristic for referenced tables.
@@ -27,6 +27,9 @@ Implemented by **`plan`** (`Phase3PlansReport` in **`plans.json`**) using **`db-
 
 - **`db.implicit_conversion_risk`**  
   Column-to-column equality (join / `WHERE` **col = col**) compares **`sys.columns`**/`sys.types` for both sides (`system_type_id`, `user_type_id`, collation for string kinds). Warns when types or collation differ in ways that commonly force implicit conversions at runtime.
+
+- **`db.parameter_type_mismatch`**  
+  Compares catalog column types to **static binding hints** when present on **`queries.json`** rows (**`parameterBindingsJson`**): C# **`SqlParameter`** metadata from **`SqlHelper`** call sites, or TypeORM **`.query(sql, [params])`** when the second argument is an **array literal** (per-index **`tsKind`**: `number` / `string` / `boolean`, plus simple **`const x = literal`** resolution in enclosing blocks). Uses T-SQL AST for **`@p` / variable** comparisons and a **`$n` placeholder** heuristic when SQL does not T-SQL-parse. Rows without binding metadata are skipped for this rule.
 
 ### Statistics freshness
 

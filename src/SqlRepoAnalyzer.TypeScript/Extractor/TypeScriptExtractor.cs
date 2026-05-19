@@ -77,7 +77,8 @@ public sealed class TypeScriptExtractor
                     dto.EndLine,
                     dto.EndCol,
                     dto.SqlText,
-                    dto.Completeness
+                    dto.Completeness,
+                    dto.ParameterBindingsJson
                 ));
             }
             catch (Exception ex)

@@ -14,7 +14,8 @@
  *       | "typeorm_query_dynamic"
  *       | "typeorm_query_builder_site",
  *     file, startLine, startCol, endLine, endCol,
- *     sqlText?, completeness?
+ *     sqlText?, completeness?,
+ *     parameterBindingsJson?  // JSON string: [{ index, providerType: "typeScript", tsKind? }, ...]
  *   }
  */
 
@@ -178,6 +179,91 @@ function isLikelyTypeOrmQueryCall(expr) {
   return true;
 }
 
+function stripParens(node) {
+  let n = node;
+  while (ts.isParenthesizedExpression(n)) n = n.expression;
+  return n;
+}
+
+function collectEnclosingBlocks(node) {
+  const blocks = [];
+  let p = node.parent;
+  while (p) {
+    if (ts.isBlock(p) || ts.isModuleBlock(p)) blocks.push(p);
+    if (ts.isSourceFile(p)) {
+      blocks.push(p);
+      break;
+    }
+    p = p.parent;
+  }
+  return blocks;
+}
+
+function findConstInitializerBeforePos(block, name, pos, sf) {
+  if (!block.statements) return null;
+  for (const st of block.statements) {
+    if (st.getStart(sf) >= pos) break;
+    if (!ts.isVariableStatement(st)) continue;
+    if ((st.declarationList.flags & ts.NodeFlags.Const) === 0) continue;
+    for (const d of st.declarationList.declarations) {
+      if (!ts.isIdentifier(d.name) || d.name.text !== name) continue;
+      if (!d.initializer) continue;
+      return d.initializer;
+    }
+  }
+  return null;
+}
+
+function resolveIdentifierTsKind(idNode, sf) {
+  const pos = idNode.getStart(sf);
+  const name = idNode.text;
+  for (const block of collectEnclosingBlocks(idNode)) {
+    const init = findConstInitializerBeforePos(block, name, pos, sf);
+    if (init) {
+      const k = classifyTypeormBindingLiteral(stripParens(init), sf);
+      if (k) return k;
+    }
+  }
+  return null;
+}
+
+function classifyTypeormBindingLiteral(node, sf) {
+  const n = stripParens(node);
+  if (ts.isPrefixUnaryExpression(n)) {
+    if (
+      (n.operator === ts.SyntaxKind.MinusToken || n.operator === ts.SyntaxKind.PlusToken) &&
+      ts.isNumericLiteral(n.operand)
+    ) {
+      return "number";
+    }
+  }
+  if (ts.isNumericLiteral(n)) return "number";
+  if (ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n)) return "string";
+  if (n.kind === ts.SyntaxKind.TrueKeyword || n.kind === ts.SyntaxKind.FalseKeyword) return "boolean";
+  if (ts.isIdentifier(n)) return resolveIdentifierTsKind(n, sf);
+  return null;
+}
+
+/** @returns {string | null} */
+function trySerializeTypeormParameterBindings(arrayLiteral, sf) {
+  const rows = [];
+  let i = 0;
+  for (const el of arrayLiteral.elements) {
+    i += 1;
+    if (ts.isOmittedExpression(el)) {
+      rows.push({ index: i, providerType: "typeScript" });
+      continue;
+    }
+
+    const tsKind = classifyTypeormBindingLiteral(el, sf);
+    const row = { index: i, providerType: "typeScript" };
+    if (tsKind) row.tsKind = tsKind;
+    rows.push(row);
+  }
+
+  return rows.length > 0 ? JSON.stringify(rows) : null;
+}
+
 function emitTypeOrmQueryCall(sf, file, node, sqlText, completeness, sourceKind) {
   const start = lineCol(sf, node.getStart(sf));
   const end = lineCol(sf, node.getEnd());
@@ -242,7 +328,11 @@ for (const file of filePaths) {
           if (text && isSqlCandidate(text) && isLikelyTypeOrmQueryCall(calleeExpr)) {
             const start = lineCol(sf, sqlArg.getStart(sf));
             const end = lineCol(sf, sqlArg.getEnd());
-            emit({
+            const paramBindingsJson =
+              maybeCall.arguments.length >= 2 && ts.isArrayLiteralExpression(maybeCall.arguments[1])
+                ? trySerializeTypeormParameterBindings(maybeCall.arguments[1], sf)
+                : null;
+            const payload = {
               sourceKind: "typeorm_raw_query",
               file,
               startLine: start.line,
@@ -251,7 +341,9 @@ for (const file of filePaths) {
               endCol: end.col,
               sqlText: text,
               completeness: "full",
-            });
+            };
+            if (paramBindingsJson) payload.parameterBindingsJson = paramBindingsJson;
+            emit(payload);
           } else if (!text && isLikelyTypeOrmQueryCall(calleeExpr)) {
             emitTypeOrmQueryCall(sf, file, maybeCall, null, "partial", "typeorm_query_dynamic");
           }

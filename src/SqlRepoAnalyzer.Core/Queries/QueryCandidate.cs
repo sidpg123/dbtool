@@ -8,6 +8,5 @@ public sealed record QueryCandidate(
     int EndLine,
     int EndCol,
     string? SqlText,
-    string? Completeness = null
-);
-
+    string? Completeness = null,
+    string? ParameterBindingsJson = null);

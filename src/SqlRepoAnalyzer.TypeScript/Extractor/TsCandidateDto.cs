@@ -8,6 +8,6 @@ public sealed record TsCandidateDto(
     int EndLine,
     int EndCol,
     string? SqlText,
-    string? Completeness
-);
+    string? Completeness,
+    string? ParameterBindingsJson = null);
 
